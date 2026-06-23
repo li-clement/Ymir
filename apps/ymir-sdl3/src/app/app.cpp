@@ -2272,6 +2272,7 @@ void App::RunEmulator() {
                     }
                     ImGui::MenuItem("Backup memory manager", nullptr,
                                     &m_windowManagerService.BackupMemoryManagerWindow().Open);
+                    ImGui::MenuItem("Cheat manager", nullptr, &m_windowManagerService.CheatManagerWindow().Open);
 
                     ImGui::Separator();
 
