@@ -292,6 +292,8 @@ add_library(ymir-core
     src/ymir/media/loader/loader_mdf_mds.cpp
 
     src/ymir/sys/backup_ram.cpp
+    src/ymir/sys/cheats.cpp
+    src/ymir/sys/cheat_search.cpp
     src/ymir/sys/memory.cpp
     src/ymir/sys/null_program.hpp
     src/ymir/sys/saturn.cpp

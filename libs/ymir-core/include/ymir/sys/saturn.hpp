@@ -19,6 +19,8 @@ See @ref index for instructions on how to use the emulator.
 #include "memory.hpp"
 #include "system.hpp"
 
+#include <ymir/sys/cheats.hpp>
+
 #include <ymir/hw/cart/cart.hpp>
 #include <ymir/hw/cart/cart_slot.hpp>
 #include <ymir/hw/cdblock/cd_drive.hpp>
@@ -437,6 +439,8 @@ public:
     smpc::SMPC SMPC;          ///< SMPC and input devices
     scsp::SCSP SCSP;          ///< SCSP and its DSP, and MC68EC000 CPU
     cdblock::CDBlock CDBlock; ///< CD block and media
+
+    sys::CheatEngine cheats;  ///< User-supplied cheat codes applied each frame
 
     // LLE CD block components
     // TODO: move them to cdblock::CDBlock
