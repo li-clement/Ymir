@@ -104,6 +104,8 @@ add_executable(ymir-sdl3
     src/app/ui/model/debug/sh2_watchpoints_manager.cpp
     src/app/ui/model/debug/sh2_watchpoints_manager.hpp
 
+    src/app/ui/state/cheat_list_state.cpp
+    src/app/ui/state/cheat_list_state.hpp
     src/app/ui/state/debug/memory_viewer_state.hpp
 
     src/app/ui/utils/debug/vdp_window_set_printer.hpp

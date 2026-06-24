@@ -1,6 +1,7 @@
 #include "cheat_manager_window.hpp"
 
-#include <ymir/sys/cheats.hpp>
+#include <app/events/emu_event_factory.hpp>
+
 #include <ymir/sys/saturn.hpp>
 
 #include <imgui.h>
@@ -22,7 +23,6 @@ struct SearchOpEntry {
     bool needsOperand;
 };
 
-// Order chosen for ease of use: most common ops first.
 constexpr SearchOpEntry kSearchOps[] = {
     {"= value",          sys::SearchOp::Equal,           true},
     {"!= value",         sys::SearchOp::NotEqual,        true},
@@ -36,7 +36,6 @@ constexpr SearchOpEntry kSearchOps[] = {
     {"decreased by N",   sys::SearchOp::DecreasedBy,     true},
 };
 
-// Parses a hex operand. Returns 0 on parse failure (the UI gates this).
 uint32 ParseHex(const char *s) {
     if (s == nullptr || *s == '\0') {
         return 0;
@@ -55,14 +54,14 @@ uint32 ParseHex(const char *s) {
         } else if (c >= 'A' && c <= 'F') {
             d = c - 'A' + 10;
         } else {
-            return v; // bail on first non-hex char
+            return v;
         }
         v = (v << 4) | d;
     }
     return v;
 }
 
-sys::SearchWidth ToWidth(int idx) {
+sys::SearchWidth ToSearchWidth(int idx) {
     switch (idx) {
     case 0: return sys::SearchWidth::Byte;
     case 1: return sys::SearchWidth::Word;
@@ -70,7 +69,7 @@ sys::SearchWidth ToWidth(int idx) {
     }
 }
 
-int DigitsForWidth(sys::SearchWidth w) {
+int DigitsForSearchWidth(sys::SearchWidth w) {
     switch (w) {
     case sys::SearchWidth::Byte: return 2;
     case sys::SearchWidth::Word: return 4;
@@ -79,11 +78,29 @@ int DigitsForWidth(sys::SearchWidth w) {
     return 4;
 }
 
-const char *WidthName(sys::SearchWidth w) {
+const char *SearchWidthName(sys::SearchWidth w) {
     switch (w) {
     case sys::SearchWidth::Byte: return "8 ";
     case sys::SearchWidth::Word: return "16";
     case sys::SearchWidth::Long: return "32";
+    }
+    return "??";
+}
+
+int DigitsForCheatWidth(sys::CheatWidth w) {
+    switch (w) {
+    case sys::CheatWidth::Byte: return 2;
+    case sys::CheatWidth::Word: return 4;
+    case sys::CheatWidth::Long: return 8;
+    }
+    return 4;
+}
+
+const char *CheatWidthName(sys::CheatWidth w) {
+    switch (w) {
+    case sys::CheatWidth::Byte: return "8 ";
+    case sys::CheatWidth::Word: return "16";
+    case sys::CheatWidth::Long: return "32";
     }
     return "??";
 }
@@ -100,9 +117,12 @@ void CheatManagerWindow::PrepareWindow() {
                                         ImVec2(FLT_MAX, FLT_MAX));
 }
 
+void CheatManagerWindow::PushActiveCodes() {
+    m_context.EnqueueEvent(events::emu::SetActiveCheatCodes(m_cheatList.BuildActiveCodes()));
+}
+
 void CheatManagerWindow::DrawContents() {
-    auto *saturn = m_context.saturn.instance.get();
-    if (saturn == nullptr) {
+    if (m_context.saturn.instance == nullptr) {
         ImGui::TextUnformatted("Saturn instance not available.");
         return;
     }
@@ -119,17 +139,18 @@ void CheatManagerWindow::DrawContents() {
 }
 
 void CheatManagerWindow::DrawSearchSection() {
-    auto *saturn = m_context.saturn.instance.get();
-    auto &mem = saturn->mem;
-    auto &engine = saturn->cheats;
+    // The search algorithm lives in ymir-core because it encodes Saturn WRAM
+    // address aliases and endian rules, but the search object itself is owned
+    // by this frontend window. This section only performs read-only
+    // debugger/probe-style access (same precedent as Memory Viewer reads);
+    // every mutation still flows through events::emu.
+    auto &mem = m_context.saturn.instance->mem;
 
     ImGui::TextDisabled(
         "Workflow: pick a value width, scan for the value, change it in-game, then narrow with the buttons below.");
 
-    // --- Width + operator + operand row ---
     ImGui::SetNextItemWidth(90.0f * m_context.displayScale);
     if (ImGui::Combo("Width##search_w", &m_searchWidth, kWidthLabels, IM_ARRAYSIZE(kWidthLabels))) {
-        // Width change invalidates the current search (different alignment).
         m_search.Reset();
     }
 
@@ -156,12 +177,11 @@ void CheatManagerWindow::DrawSearchSection() {
         ImGui::EndDisabled();
     }
 
-    // --- Scan buttons ---
     const uint32 operand = needsOperand ? ParseHex(m_operand.data()) : 0u;
     const auto op = kSearchOps[m_searchOp].op;
 
     if (ImGui::Button("First scan")) {
-        m_search.FirstScan(mem, op, ToWidth(m_searchWidth), operand);
+        m_search.FirstScan(mem, op, ToSearchWidth(m_searchWidth), operand);
     }
     ImGui::SameLine();
     if (!m_search.HasInitialScan()) {
@@ -185,12 +205,10 @@ void CheatManagerWindow::DrawSearchSection() {
     ImGui::SameLine();
     ImGui::Checkbox("Auto-refresh values", &m_autoRefresh);
 
-    // Live-refresh while drawing so the user can watch values change.
     if (m_autoRefresh && m_search.HasInitialScan()) {
         m_search.RefreshValues(mem);
     }
 
-    // --- Results summary + table ---
     if (!m_search.HasInitialScan()) {
         ImGui::TextDisabled("No scan performed yet.");
         return;
@@ -204,7 +222,6 @@ void CheatManagerWindow::DrawSearchSection() {
     }
     ImGui::Text("Matches: %zu", matchCount);
 
-    // Render at most kMaxRows to keep the UI responsive on huge initial scans.
     constexpr size_t kMaxRows = 200;
     const size_t rows = matchCount > kMaxRows ? kMaxRows : matchCount;
     if (matchCount > kMaxRows) {
@@ -212,8 +229,7 @@ void CheatManagerWindow::DrawSearchSection() {
         ImGui::TextDisabled("(showing first %zu — narrow further to see all)", kMaxRows);
     }
 
-    // Freeze-value override row: when set, "Freeze" buttons use this value
-    // instead of the currently observed one. Empty = use observed value.
+    // Freeze-value override row.
     ImGui::SetNextItemWidth(120.0f * m_context.displayScale);
     ImGui::InputTextWithHint("Freeze at##fv", "<observed>", m_freezeValue.data(), m_freezeValue.size(),
                              ImGuiInputTextFlags_CharsHexadecimal);
@@ -233,8 +249,8 @@ void CheatManagerWindow::DrawSearchSection() {
         ImGui::TableHeadersRow();
 
         const auto width = m_search.Width();
-        const int digits = DigitsForWidth(width);
-        const char *widthName = WidthName(width);
+        const int digits = DigitsForSearchWidth(width);
+        const char *widthName = SearchWidthName(width);
         const auto &matches = m_search.Matches();
 
         for (size_t i = 0; i < rows; ++i) {
@@ -250,15 +266,15 @@ void CheatManagerWindow::DrawSearchSection() {
 
             ImGui::TableNextColumn();
             if (ImGui::SmallButton("Freeze")) {
-                // Use the user-supplied freeze value if non-empty, else the
-                // currently observed value.
                 const uint32 freezeVal =
                     m_freezeValue[0] != '\0' ? ParseHex(m_freezeValue.data()) : m.lastValue;
                 char buf[64];
                 std::snprintf(buf, sizeof(buf), "%08X %0*X", m.address, digits, freezeVal);
                 char name[64];
                 std::snprintf(name, sizeof(name), "Freeze %08X = %0*X", m.address, digits, freezeVal);
-                engine.AddFromText(name, buf, /*enabled=*/m_freezeEnabledOnAdd);
+                if (m_cheatList.AddFromText(name, buf, /*enabled=*/m_freezeEnabledOnAdd)) {
+                    PushActiveCodes();
+                }
             }
 
             ImGui::PopID();
@@ -268,29 +284,28 @@ void CheatManagerWindow::DrawSearchSection() {
 }
 
 void CheatManagerWindow::DrawCheatList() {
-    auto *saturn = m_context.saturn.instance.get();
-    auto &engine = saturn->cheats;
-
-    // Master enable + entry count
-    bool master = engine.MasterEnabled();
+    bool master = m_cheatList.MasterEnabled();
     if (ImGui::Checkbox("Master enable", &master)) {
-        engine.SetMasterEnabled(master);
+        m_cheatList.SetMasterEnabled(master);
+        PushActiveCodes();
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("(%zu cheat%s loaded)", engine.Count(), engine.Count() == 1 ? "" : "s");
+    ImGui::TextDisabled("(%zu cheat%s loaded)", m_cheatList.Count(),
+                        m_cheatList.Count() == 1 ? "" : "s");
     ImGui::SameLine();
     if (ImGui::SmallButton("Disable all")) {
-        for (auto &e : engine.Entries()) {
-            e.enabled = false;
-        }
+        m_cheatList.DisableAll();
+        PushActiveCodes();
     }
     ImGui::SameLine();
     if (ImGui::SmallButton("Clear list")) {
-        engine.Clear();
+        m_cheatList.Clear();
+        PushActiveCodes();
     }
 
-    auto &entries = engine.Entries();
+    auto &entries = m_cheatList.Entries();
     size_t removeIndex = static_cast<size_t>(-1);
+    bool listChanged = false;
 
     if (entries.empty()) {
         ImGui::TextDisabled("No cheats. Use the searcher above or add manually below.");
@@ -311,21 +326,17 @@ void CheatManagerWindow::DrawCheatList() {
             ImGui::TableNextRow();
 
             ImGui::TableNextColumn();
-            ImGui::Checkbox("##en", &entry.enabled);
+            if (ImGui::Checkbox("##en", &entry.enabled)) {
+                listChanged = true;
+            }
 
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(entry.name.empty() ? "(unnamed)" : entry.name.c_str());
 
             ImGui::TableNextColumn();
             for (const auto &c : entry.codes) {
-                const char *widthStr = c.width == sys::CheatWidth::Byte   ? "8 "
-                                       : c.width == sys::CheatWidth::Word ? "16"
-                                                                          : "32";
-                ImGui::Text("%08X = %0*X  [%s]", c.address,
-                            c.width == sys::CheatWidth::Byte   ? 2
-                            : c.width == sys::CheatWidth::Word ? 4
-                                                               : 8,
-                            c.value, widthStr);
+                ImGui::Text("%08X = %0*X  [%s]", c.address, DigitsForCheatWidth(c.width), c.value,
+                            CheatWidthName(c.width));
             }
 
             ImGui::TableNextColumn();
@@ -339,14 +350,15 @@ void CheatManagerWindow::DrawCheatList() {
     }
 
     if (removeIndex != static_cast<size_t>(-1)) {
-        engine.RemoveAt(removeIndex);
+        m_cheatList.RemoveAt(removeIndex);
+        listChanged = true;
+    }
+    if (listChanged) {
+        PushActiveCodes();
     }
 }
 
 void CheatManagerWindow::DrawAddSection() {
-    auto *saturn = m_context.saturn.instance.get();
-    auto &engine = saturn->cheats;
-
     ImGui::SetNextItemWidth(-1);
     ImGui::InputTextWithHint("##name", "Name (e.g. Infinite Lives)", m_newName.data(), m_newName.size());
 
@@ -360,12 +372,15 @@ void CheatManagerWindow::DrawAddSection() {
         std::string text = m_newCode.data();
         if (text.empty()) {
             m_lastError = "Cannot add cheat: code text is empty.";
-        } else if (!engine.AddFromText(name.empty() ? "Unnamed" : name, text, /*enabled=*/false)) {
+        } else if (!m_cheatList.AddFromText(name.empty() ? "Unnamed" : name, text, /*enabled=*/false)) {
             m_lastError = "No valid code lines found. Each line should be: ADDR VALUE (hex).";
         } else {
             m_lastError.clear();
             m_newName.fill('\0');
             m_newCode.fill('\0');
+            // Newly added entry is disabled, so the active list is unchanged
+            // — but push anyway in case master state matters. Cheap call.
+            PushActiveCodes();
         }
     }
     ImGui::SameLine();
