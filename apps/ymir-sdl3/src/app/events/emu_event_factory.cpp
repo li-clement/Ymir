@@ -79,6 +79,12 @@ EmuEvent SetDebugTrace(bool enable) {
     });
 }
 
+EmuEvent SetActiveCheatCodes(std::vector<ymir::sys::CheatCode> codes) {
+    return RunFunction([codes = std::move(codes)](SharedContext &ctx) {
+        ctx.saturn.instance->cheats.SetActiveCodes(codes);
+    });
+}
+
 EmuEvent DumpMemory() {
     return RunFunction([](SharedContext &ctx) {
         auto dumpPath = ctx.profile.GetPath(ProfilePath::Dumps);

@@ -2,7 +2,23 @@
 
 /**
 @file
-@brief Memory searcher (Cheat Engine-style) for locating cheat addresses.
+@brief Emulator-domain WRAM search utility for locating cheat addresses.
+
+This type intentionally lives in `libs/ymir-core` even though the first UI
+consumer is the SDL3 Cheat Manager window. It has no frontend presentation
+state (no names, raw text, formatting, persistence, or ImGui concerns). It
+only knows Saturn-domain facts:
+
+  - which WRAM banks are relevant for gameplay values,
+  - their SH-2 bus aliases (Low WRAM 0x00200000, High WRAM 0x06000000),
+  - Saturn big-endian word/long decoding,
+  - and the comparison/refinement algorithm for narrowing addresses.
+
+That makes it reusable by other frontends (headless tools, debugger scripts,
+future remote-debug UI) without duplicating memory-map logic in each one.
+The frontend owns the lifetime of a `CheatSearch` instance and all UI text;
+the core utility only consumes a `const SystemMemory &` snapshot and returns
+primitive matches.
 
 Workflow:
 
@@ -12,7 +28,7 @@ Workflow:
   3. The user changes the value in-game, then calls NextScan(op, value) — the
      existing match list is filtered down.
   4. Iterate steps 3 until the list is small enough to add the surviving
-     candidate(s) to the CheatEngine.
+     candidate(s) to the frontend CheatList.
 
 We deliberately read the WRAM arrays directly (not via SH2Bus::Peek) because
 the bus path is too slow for a 2 MiB sweep — direct memory iteration runs
@@ -21,6 +37,12 @@ about two orders of magnitude faster.
 Endianness: Saturn is big-endian. Word/long reads use big-endian decode by
 default; toggle endian=false on the search to read little-endian instead
 (rare, but some games use packed structures via the SH-2 R-class).
+
+Threading: this class is not internally synchronized. Callers must invoke it
+from a context that is acceptable for read-only debugger/probe access. The
+SDL frontend currently does this from the UI thread, matching the existing
+Memory Viewer read pattern; all writes/mutations still go through the
+emulator event queue.
 */
 
 #include <ymir/core/types.hpp>
@@ -58,9 +80,14 @@ struct SearchMatch {
     uint32 lastValue; ///< Value observed at the most recent scan
 };
 
-/// @brief Memory searcher. Reads directly from SystemMemory WRAM banks.
+/// @brief Emulator-domain WRAM search helper.
 ///
-/// Not thread-safe. Intended to be driven from the UI thread between frames.
+/// Owns no UI presentation data; callers own lifetime and text. This utility
+/// stays in core because it encodes Saturn memory-map and endian knowledge,
+/// and can be reused by non-SDL frontends or headless debug tooling.
+///
+/// Not thread-safe. Intended for read-only debugger/probe-style use; callers
+/// are responsible for invoking it from an acceptable thread/context.
 class CheatSearch {
 public:
     CheatSearch() = default;
