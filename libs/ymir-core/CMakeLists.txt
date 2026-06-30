@@ -49,6 +49,8 @@ add_library(ymir-core
     include/ymir/hw/m68k/m68k_defs.hpp
     include/ymir/hw/m68k/m68k_disasm.hpp
 
+    include/ymir/hw/mpeg/mpeg_decoder.hpp
+
     include/ymir/hw/scsp/scsp.hpp
     include/ymir/hw/scsp/scsp_callbacks.hpp
     include/ymir/hw/scsp/scsp_defs.hpp
@@ -248,6 +250,8 @@ add_library(ymir-core
     src/ymir/hw/m68k/m68k_decode.cpp
     src/ymir/hw/m68k/m68k_disasm.cpp
 
+    src/ymir/hw/mpeg/mpeg_decoder.cpp
+
     src/ymir/hw/scsp/scsp.cpp
     src/ymir/hw/scsp/scsp_dsp.cpp
     src/ymir/hw/scsp/scsp_slot.cpp
@@ -313,6 +317,7 @@ set_target_properties(ymir-core PROPERTIES
 target_include_directories(ymir-core
     PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     PRIVATE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+    PRIVATE "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/vendor/pl_mpeg>"
 )
 target_compile_features(ymir-core PUBLIC cxx_std_20)
 
