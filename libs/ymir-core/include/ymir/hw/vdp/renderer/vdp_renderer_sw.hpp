@@ -932,6 +932,8 @@ private:
     // Current display framebuffer.
     std::array<uint32, kMaxResH * kMaxResV> m_framebuffer;
 
+    void DrawMPEGVideoOverlay();
+
     // Retrieves the current set of VDP2 registers.
     VDP2Regs &VDP2GetRegs();
 
