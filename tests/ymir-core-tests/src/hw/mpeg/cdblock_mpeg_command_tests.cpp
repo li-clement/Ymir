@@ -2,6 +2,7 @@
 #include <ymir/hw/cdblock/cdblock_defs.hpp>
 #include <ymir/media/disc.hpp>
 #include <ymir/media/filesystem.hpp>
+#include <ymir/media/binary_reader/binary_reader_mem.hpp>
 #include <ymir/core/configuration.hpp>
 #include <ymir/core/scheduler.hpp>
 #include <ymir/sys/bus.hpp>
@@ -48,6 +49,37 @@ struct CDBlockHarness {
     }
 };
 
+
+std::vector<uint8> BuildMode1DiscImage(std::span<const uint8> payload) {
+    constexpr uint32 kSectorSize = 2048;
+    const uint32 sectorCount = (payload.size() + kSectorSize - 1) / kSectorSize;
+    std::vector<uint8> image(static_cast<size_t>(sectorCount) * kSectorSize, 0);
+    std::copy(payload.begin(), payload.end(), image.begin());
+    return image;
+}
+
+void ConfigureSingleDataTrack(media::Disc &disc, std::vector<uint8> image, uint32 sectorCount) {
+    media::Session session{};
+    session.numTracks = 1;
+    session.firstTrackIndex = 0;
+    session.lastTrackIndex = 0;
+    session.startFrameAddress = 150;
+    session.endFrameAddress = 150 + sectorCount - 1;
+
+    auto &track = session.tracks[0];
+    track.binaryReader = std::make_unique<media::MemoryBinaryReader>(std::move(image));
+    track.SetSectorSize(2048);
+    track.controlADR = 0x41;
+    track.startFrameAddress = session.startFrameAddress;
+    track.endFrameAddress = session.endFrameAddress;
+    track.index01FrameAddress = session.startFrameAddress;
+    track.indices = {{.startFrameAddress = session.startFrameAddress, .endFrameAddress = session.endFrameAddress}};
+
+    session.BuildTOC();
+    disc.sessions.clear();
+    disc.sessions.push_back(std::move(session));
+}
+
 } // namespace
 
 TEST_CASE("CD Block MPEG commands expose a minimal authenticated Movie Card", "[mpeg][movie-card][cdblock]") {
@@ -90,4 +122,41 @@ TEST_CASE("CD Block MPEG stream commands feed Movie Card decoder", "[mpeg][movie
     h.RunCommand(0x9200, 0x0001); // clear frame decoded interrupt through mask command MVP
     h.RunCommand(0x9100);
     CHECK((h.RR(1) & 0x0001) == 0);
+}
+
+
+TEST_CASE("CD Block playback streams filtered data sectors into the Movie Card", "[mpeg][movie-card][cdblock]") {
+    CDBlockHarness h;
+    auto image = BuildMode1DiscImage(kTinyMpegProgramStream);
+    ConfigureSingleDataTrack(h.disc, std::move(image), 1);
+
+    h.RunCommand(0xE000, 0x0001);
+    h.RunCommand(0x9300);
+    h.RunCommand(0x9500); // MPEG play
+    h.RunCommand(0x9A00, 0x0000); // MPEG connection consumes partition 0
+    h.RunCommand(0x9B00);
+    CHECK(h.RR(1) == 0x0000);
+    h.RunCommand(0x3000, 0x0000, 0x0000, 0x0000); // CD device -> filter 0 -> partition 0
+    h.RunCommand(0x3100);
+    CHECK((h.RR(2) >> 8u) == 0x00);
+    CHECK(h.cdb.GetMPEGCard().GetStatus() == mpeg::MPEGCardStatus::Playing);
+    h.RunCommand(0x1080, 150, 0x0080, 10); // play enough FADs to leave seek state and read sector 150
+
+    // First drive tick starts the seek. Subsequent ticks finish seek and read sectors.
+    for (int i = 0; i < 20; ++i) {
+        h.scheduler.Advance(cdblock::kDriveCyclesPlaying1x / 2);
+    }
+
+    h.cdb.GetMPEGCard().SignalEndOfStream();
+    h.RunCommand(0x3200);
+    CHECK((h.RR(2) >> 8u) == 0x00);
+    CHECK(h.cdb.GetMPEGCard().GetWidth() == 16);
+    REQUIRE(h.cdb.GetMPEGCard().HasHeaders());
+    REQUIRE(h.cdb.GetMPEGCard().DecodeNextFrame());
+    REQUIRE(h.cdb.GetMPEGCard().HasCurrentFrame());
+    CHECK(h.cdb.GetMPEGCard().GetCurrentFrame().width == 16);
+    CHECK(h.cdb.GetMPEGCard().GetCurrentFrame().height == 16);
+
+    h.RunCommand(0x9100);
+    CHECK((h.RR(1) & mpeg::kMPEGCardInterruptFrameDecoded) != 0);
 }

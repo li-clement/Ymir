@@ -1123,6 +1123,7 @@ void CDBlock::ProcessDriveStatePlay() {
                                 devlog::trace<grp::play>("Passed filter; sent to buffer partition {}",
                                                          filter.passOutput);
                                 m_partitionManager.InsertHead(filter.passOutput, buffer);
+                                FeedMPEGStream(filter.passOutput, buffer);
                                 m_lastCDWritePartition = filter.passOutput;
                                 SetInterrupt(kHIRQ_CSCT);
                             }
@@ -1199,6 +1200,25 @@ void CDBlock::ProcessDriveStatePlay() {
             m_status.statusCode = kStatusCodePause;
         }
     }
+}
+
+void CDBlock::FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer) {
+    if (m_mpegAuthStatus != 2 || m_mpegCard.GetStatus() != mpeg::MPEGCardStatus::Playing) {
+        return;
+    }
+    if (m_mpegConnection != partitionIndex) {
+        return;
+    }
+
+    const bool mode1 = buffer.data[0xF] == 0x01;
+    const bool mode2 = buffer.data[0xF] == 0x02;
+    const uint32 offset = (mode1 || mode2) ? 16u : 0u;
+    const uint32 size = std::min<size_t>(buffer.size, buffer.data.size() - offset);
+    if (size == 0) {
+        return;
+    }
+
+    m_mpegCard.AppendStreamData(std::span<const uint8>{buffer.data}.subspan(offset, size));
 }
 
 void CDBlock::CheckPlayEnd() {

@@ -173,6 +173,7 @@ private:
 
     void ProcessDriveState();
     void ProcessDriveStatePlay();
+    void FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer);
     void CheckPlayEnd();
 
     // -------------------------------------------------------------------------
