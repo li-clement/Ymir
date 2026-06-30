@@ -14,6 +14,7 @@
 #include <ymir/debug/cdblock_tracer_base.hpp>
 
 #include <ymir/hw/cdblock/cdblock_internal_callbacks.hpp>
+#include <ymir/hw/mpeg/mpeg_card.hpp>
 #include <ymir/sys/system_internal_callbacks.hpp>
 
 #include <ymir/savestate/savestate_cdblock.hpp>
@@ -51,6 +52,14 @@ public:
     void OpenTray();
     void CloseTray();
     [[nodiscard]] bool IsTrayOpen() const;
+
+    mpeg::MPEGCard &GetMPEGCard() {
+        return m_mpegCard;
+    }
+
+    const mpeg::MPEGCard &GetMPEGCard() const {
+        return m_mpegCard;
+    }
 
     // -------------------------------------------------------------------------
     // Save states
@@ -149,6 +158,14 @@ private:
     //   0: no MPEG card/not authenticated
     //   2: MPEG card present
     uint8 m_mpegAuthStatus;
+
+    mpeg::MPEGCard m_mpegCard;
+    uint16 m_mpegInterruptMask;
+    uint16 m_mpegConnection;
+    uint16 m_mpegStream;
+    uint16 m_mpegDisplay;
+    uint16 m_mpegMode;
+    uint16 m_mpegDecodingMethod;
 
     bool SetupGenericPlayback(uint32 startParam, uint32 endParam, uint16 repeatParam);
     bool SetupFilePlayback(uint32 fileID, uint32 offset, uint8 filterNumber);
