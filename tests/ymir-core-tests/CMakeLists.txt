@@ -1,5 +1,6 @@
 ## Create the executable target
 add_executable(ymir-core-tests
+    src/hw/mpeg/mpeg_card_tests.cpp
     src/hw/mpeg/mpeg_decoder_tests.cpp
 
     src/hw/scu/scu_dsp_tests.cpp

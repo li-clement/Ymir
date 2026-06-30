@@ -49,6 +49,7 @@ add_library(ymir-core
     include/ymir/hw/m68k/m68k_defs.hpp
     include/ymir/hw/m68k/m68k_disasm.hpp
 
+    include/ymir/hw/mpeg/mpeg_card.hpp
     include/ymir/hw/mpeg/mpeg_decoder.hpp
 
     include/ymir/hw/scsp/scsp.hpp
@@ -250,6 +251,7 @@ add_library(ymir-core
     src/ymir/hw/m68k/m68k_decode.cpp
     src/ymir/hw/m68k/m68k_disasm.cpp
 
+    src/ymir/hw/mpeg/mpeg_card.cpp
     src/ymir/hw/mpeg/mpeg_decoder.cpp
 
     src/ymir/hw/scsp/scsp.cpp
