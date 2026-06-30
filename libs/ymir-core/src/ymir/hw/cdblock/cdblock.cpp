@@ -126,6 +126,13 @@ void CDBlock::Reset(bool hard) {
 
     m_discAuthStatus = 0;
     m_mpegAuthStatus = 0;
+    m_mpegCard.Reset();
+    m_mpegInterruptMask = 0;
+    m_mpegConnection = 0xFFFF;
+    m_mpegStream = 0;
+    m_mpegDisplay = 0;
+    m_mpegMode = 0;
+    m_mpegDecodingMethod = 0;
 
     if (hard) {
         m_HIRQ = 0x0BE1;
@@ -1728,20 +1735,18 @@ FORCE_INLINE void CDBlock::ProcessCommand() {
     case 0x74: CmdReadFile(); break;
     case 0x75: CmdAbortFile(); break;
 
-    // case 0x90: CmdMpegGetStatus(); break;
-    // case 0x91: CmdMpegGetInterrupt(); break;
-    // case 0x92: CmdMpegSetInterruptMask(); break;
-    case 0x93:
-        CmdMpegInit();
-        break;
-        // case 0x94: CmdMpegSetMode(); break;
-        // case 0x95: CmdMpegPlay(); break;
-        // case 0x96: CmdMpegSetDecodingMethod(); break;
-        // case 0x9A: CmdMpegSetConnection(); break;
-        // case 0x9B: CmdMpegGetConnection(); break;
-        // case 0x9D: CmdMpegSetStream(); break;
-        // case 0x9E: CmdMpegGetStream(); break;
-        // case 0xA0: CmdMpegDisplay(); break;
+    case 0x90: CmdMpegGetStatus(); break;
+    case 0x91: CmdMpegGetInterrupt(); break;
+    case 0x92: CmdMpegSetInterruptMask(); break;
+    case 0x93: CmdMpegInit(); break;
+    case 0x94: CmdMpegSetMode(); break;
+    case 0x95: CmdMpegPlay(); break;
+    case 0x96: CmdMpegSetDecodingMethod(); break;
+    case 0x9A: CmdMpegSetConnection(); break;
+    case 0x9B: CmdMpegGetConnection(); break;
+    case 0x9D: CmdMpegSetStream(); break;
+    case 0x9E: CmdMpegGetStream(); break;
+    case 0xA0: CmdMpegDisplay(); break;
         // case 0xA1: CmdMpegSetWindow(); break;
         // case 0xA2: CmdMpegSetBorderColor(); break;
         // case 0xA3: CmdMpegSetFade(); break;
@@ -1795,7 +1800,7 @@ void CDBlock::CmdGetHardwareInfo() {
     // drive version    drive revision
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0x0002;
-    m_RR[2] = 0x0000;
+    m_RR[2] = m_mpegAuthStatus == 2 ? 0x0001 : 0x0000;
     m_RR[3] = 0x0600;
 
     SetInterrupt(kHIRQ_CMOK);
@@ -3240,53 +3245,144 @@ void CDBlock::CmdAbortFile() {
     SetInterrupt(kHIRQ_CMOK | kHIRQ_EFLS);
 }
 
-void CDBlock::CmdMpegGetStatus() {}
+void CDBlock::CmdMpegGetStatus() {
+    devlog::trace<grp::cmd>("-> MPEG get status");
 
-void CDBlock::CmdMpegGetInterrupt() {}
+    uint16 status = 0x0000;
+    switch (m_mpegCard.GetStatus()) {
+    case mpeg::MPEGCardStatus::Stopped: status = 0x0000; break;
+    case mpeg::MPEGCardStatus::Playing: status = 0x0001; break;
+    case mpeg::MPEGCardStatus::Ended: status = 0x0002; break;
+    case mpeg::MPEGCardStatus::Error: status = 0x00FF; break;
+    }
 
-void CDBlock::CmdMpegSetInterruptMask() {}
+    m_RR[0] = (m_mpegAuthStatus == 2 ? GetStatusCode() : 0xFF) << 8u;
+    m_RR[1] = status;
+    m_RR[2] = (m_mpegCard.GetWidth() << 8u) | (m_mpegCard.GetHeight() & 0xFFu);
+    m_RR[3] = 0;
+
+    SetInterrupt(kHIRQ_CMOK);
+}
+
+void CDBlock::CmdMpegGetInterrupt() {
+    devlog::trace<grp::cmd>("-> MPEG get interrupt");
+
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegCard.PeekInterruptFlags();
+    m_RR[2] = m_mpegInterruptMask;
+    m_RR[3] = 0;
+
+    SetInterrupt(kHIRQ_CMOK);
+}
+
+void CDBlock::CmdMpegSetInterruptMask() {
+    devlog::trace<grp::cmd>("-> MPEG set interrupt mask");
+
+    m_mpegInterruptMask = m_CR[1];
+    // MVP: treat bits set in the mask command as acknowledged MPEG interrupts.
+    m_mpegCard.ClearInterruptFlags(m_mpegInterruptMask);
+
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegCard.PeekInterruptFlags();
+    m_RR[2] = m_mpegInterruptMask;
+    m_RR[3] = 0;
+
+    SetInterrupt(kHIRQ_CMOK);
+}
 
 void CDBlock::CmdMpegInit() {
     devlog::trace<grp::cmd>("-> MPEG init");
 
-    // Input structure:
-    // 0x93     <blank>
-    // <blank>
-    // <blank>
-    // <blank>
+    m_mpegCard.Initialize();
+    if (m_mpegAuthStatus != 2) {
+        m_mpegAuthStatus = 2;
+    }
 
-    // TODO: initialize MPEG stuff
-    devlog::info<grp::base>("MPEG init command is unimplemented");
-    YMIR_DEV_CHECK();
-
-    // Output structure:
-    // status code (FF=unauthenticated)  <blank>
-    // <blank>
-    // <blank>
-    // <blank>
-    m_RR[0] = 0xFF00;
+    m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
     m_RR[3] = 0;
 
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPST);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
 }
 
-void CDBlock::CmdMpegSetMode() {}
+void CDBlock::CmdMpegSetMode() {
+    devlog::trace<grp::cmd>("-> MPEG set mode");
+    m_mpegMode = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegMode;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+}
 
-void CDBlock::CmdMpegPlay() {}
+void CDBlock::CmdMpegPlay() {
+    devlog::trace<grp::cmd>("-> MPEG play");
+    m_mpegCard.StartPlayback();
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+}
 
-void CDBlock::CmdMpegSetDecodingMethod() {}
+void CDBlock::CmdMpegSetDecodingMethod() {
+    devlog::trace<grp::cmd>("-> MPEG set decoding method");
+    m_mpegDecodingMethod = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegDecodingMethod;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+}
 
-void CDBlock::CmdMpegSetConnection() {}
+void CDBlock::CmdMpegSetConnection() {
+    devlog::trace<grp::cmd>("-> MPEG set connection");
+    m_mpegConnection = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegConnection;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+}
 
-void CDBlock::CmdMpegGetConnection() {}
+void CDBlock::CmdMpegGetConnection() {
+    devlog::trace<grp::cmd>("-> MPEG get connection");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegConnection;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK);
+}
 
-void CDBlock::CmdMpegSetStream() {}
+void CDBlock::CmdMpegSetStream() {
+    devlog::trace<grp::cmd>("-> MPEG set stream");
+    m_mpegStream = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegStream;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+}
 
-void CDBlock::CmdMpegGetStream() {}
+void CDBlock::CmdMpegGetStream() {
+    devlog::trace<grp::cmd>("-> MPEG get stream");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegStream;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK);
+}
 
-void CDBlock::CmdMpegDisplay() {}
+void CDBlock::CmdMpegDisplay() {
+    devlog::trace<grp::cmd>("-> MPEG display");
+    m_mpegDisplay = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegDisplay;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+}
 
 void CDBlock::CmdMpegSetWindow() {}
 
