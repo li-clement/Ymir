@@ -58,6 +58,10 @@ public:
     [[nodiscard]] MPEGCardInterruptFlags TakeInterruptFlags();
     void ClearInterruptFlags(MPEGCardInterruptFlags flags);
 
+    // MVP: a single global card instance shared with the software overlay.
+    // Real wiring will live in Saturn / VDP after EXBG integration.
+    [[nodiscard]] static MPEGCard &GetGlobal();
+
 private:
     MPEGVideoDecoder m_decoder;
     std::optional<DecodedVideoFrame> m_currentFrame;

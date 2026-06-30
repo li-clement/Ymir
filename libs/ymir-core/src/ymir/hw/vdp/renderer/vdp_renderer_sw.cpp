@@ -1,5 +1,7 @@
 #include <ymir/hw/vdp/renderer/vdp_renderer_sw.hpp>
 
+#include <ymir/hw/mpeg/mpeg_overlay.hpp>
+
 #include <ymir/util/constexpr_for.hpp>
 #include <ymir/util/dev_log.hpp>
 #include <ymir/util/inline.hpp>
@@ -552,6 +554,7 @@ void SoftwareVDPRenderer::VDP2EndFrame() {
         Callbacks.VDP2ResolutionChanged(m_HRes, m_VRes);
     }
     Callbacks.VDP2DrawFinished();
+    DrawMPEGVideoOverlay();
     SwCallbacks.FrameComplete(m_framebuffer.data(), m_HRes, m_VRes);
 }
 

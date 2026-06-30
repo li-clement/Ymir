@@ -51,6 +51,7 @@ add_library(ymir-core
 
     include/ymir/hw/mpeg/mpeg_card.hpp
     include/ymir/hw/mpeg/mpeg_decoder.hpp
+    include/ymir/hw/mpeg/mpeg_overlay.hpp
 
     include/ymir/hw/scsp/scsp.hpp
     include/ymir/hw/scsp/scsp_callbacks.hpp
@@ -253,6 +254,7 @@ add_library(ymir-core
 
     src/ymir/hw/mpeg/mpeg_card.cpp
     src/ymir/hw/mpeg/mpeg_decoder.cpp
+    src/ymir/hw/mpeg/mpeg_overlay.cpp
 
     src/ymir/hw/scsp/scsp.cpp
     src/ymir/hw/scsp/scsp_dsp.cpp
