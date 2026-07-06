@@ -152,8 +152,10 @@ Saturn::Saturn()
     ConfigureAccessCycles(false);
 
     // Wire Movie Card video overlay into the software VDP renderer.
-    if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
-        swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
+    if (configuration.cdblock.movieCardEnabled) {
+        if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+            swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
+        }
     }
 
     m_enableDebugTracing = false;
@@ -168,6 +170,11 @@ Saturn::Saturn()
     configuration.system.videoStandard.Observe(
         [&](core::config::sys::VideoStandard videoStandard) { UpdateVideoStandard(videoStandard); });
     configuration.cdblock.useLLE.Observe([&](bool enabled) { SetCDBlockLLE(enabled); });
+    configuration.cdblock.movieCardEnabled.Observe([&](bool enabled) {
+        if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+            swRenderer->SetMPEGCard(enabled ? &CDBlock.GetMPEGCard() : nullptr);
+        }
+    });
 
     Reset(true);
 }

@@ -1099,6 +1099,7 @@ void Settings::ResetToDefaults() {
 
     cdblock.readSpeedFactor = 2;
     cdblock.useLLE = false;
+    cdblock.movieCardEnabled = false;
     cdblock.overrideROM = false;
     cdblock.romPath = "";
 }
@@ -1123,6 +1124,7 @@ void Settings::BindConfiguration(ymir::core::Configuration &config) {
 
     cdblock.readSpeedFactor.Observe([&](auto value) { config.cdblock.readSpeedFactor = value; });
     cdblock.useLLE.Observe([&](auto value) { m_context.EnqueueEvent(events::emu::SetCDBlockLLE(value)); });
+    cdblock.movieCardEnabled.Observe([&](auto value) { config.cdblock.movieCardEnabled = value; });
 }
 
 SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
@@ -1646,6 +1648,7 @@ SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
     if (auto tblCDBlock = data["CDBlock"]) {
         Parse(tblCDBlock, "ReadSpeed", cdblock.readSpeedFactor);
         Parse(tblCDBlock, "UseLLE", cdblock.useLLE);
+        Parse(tblCDBlock, "MovieCardEnabled", cdblock.movieCardEnabled);
         Parse(tblCDBlock, "OverrideROM", cdblock.overrideROM);
         Parse(tblCDBlock, "ROMPath", cdblock.romPath);
         cdblock.romPath = Absolute(ProfilePath::CDBlockROMImages, cdblock.romPath);
@@ -2040,6 +2043,7 @@ SettingsSaveResult Settings::Save() {
         {"CDBlock", toml::table{{
             {"ReadSpeed", cdblock.readSpeedFactor.Get()},
             {"UseLLE", cdblock.useLLE.Get()},
+            {"MovieCardEnabled", cdblock.movieCardEnabled.Get()},
             {"OverrideROM", cdblock.overrideROM},
             {"ROMPath", Proximate(ProfilePath::CDBlockROMImages, cdblock.romPath).native()},
         }}},

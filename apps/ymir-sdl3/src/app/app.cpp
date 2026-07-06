@@ -1051,11 +1051,13 @@ void App::RunEmulator() {
          [](sint16 left, sint16 right, void *ctx) {
              auto *c = static_cast<SharedContext *>(ctx);
              // Mix Movie Card MPEG audio (bypasses SCSP on real hardware)
-             auto &mpeg = c->saturn.instance->CDBlock.GetMPEGCard();
-             sint16 mpegL, mpegR;
-             if (mpeg.GetNextAudioSample(mpegL, mpegR)) {
-                 left = static_cast<sint16>(std::clamp<sint32>(left + mpegL, -32768, 32767));
-                 right = static_cast<sint16>(std::clamp<sint32>(right + mpegR, -32768, 32767));
+             if (c->saturn.instance->configuration.cdblock.movieCardEnabled) {
+                 auto &mpeg = c->saturn.instance->CDBlock.GetMPEGCard();
+                 sint16 mpegL, mpegR;
+                 if (mpeg.GetNextAudioSample(mpegL, mpegR)) {
+                     left = static_cast<sint16>(std::clamp<sint32>(left + mpegL, -32768, 32767));
+                     right = static_cast<sint16>(std::clamp<sint32>(right + mpegR, -32768, 32767));
+                 }
              }
              c->audioSystem.ReceiveSample(left, right);
          }});
