@@ -530,6 +530,12 @@ void Saturn::RunFrameImpl() {
         }
     }
     SCSP.SyncSCSPThreadPublic();
+
+    // Decode the next MPEG video frame at the end of each emulated frame.
+    // The decoded frame will be displayed by the VDP overlay on the next frame.
+    if (configuration.cdblock.movieCardEnabled) {
+        CDBlock.GetMPEGCard().DecodeNextFrame();
+    }
 }
 
 template <bool debug, bool enableSH2Cache, bool cdblockLLE>
