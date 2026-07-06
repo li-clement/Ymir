@@ -61,6 +61,10 @@ public:
         return m_mpegCard;
     }
 
+    void SetMovieCardPresent(bool present) {
+        m_movieCardPresent = present;
+    }
+
     // -------------------------------------------------------------------------
     // Save states
 
@@ -166,6 +170,8 @@ private:
     uint16 m_mpegDisplay;
     uint16 m_mpegMode;
     uint16 m_mpegDecodingMethod;
+
+    bool m_movieCardPresent = false;
 
     bool SetupGenericPlayback(uint32 startParam, uint32 endParam, uint16 repeatParam);
     bool SetupFilePlayback(uint32 fileID, uint32 offset, uint8 filterNumber);

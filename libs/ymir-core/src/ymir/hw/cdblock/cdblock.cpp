@@ -1820,7 +1820,7 @@ void CDBlock::CmdGetHardwareInfo() {
     // drive version    drive revision
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0x0002;
-    m_RR[2] = m_mpegAuthStatus == 2 ? 0x0001 : 0x0000;
+    m_RR[2] = (m_mpegAuthStatus == 2 || m_movieCardPresent) ? 0x0001 : 0x0000;
     m_RR[3] = 0x0600;
 
     SetInterrupt(kHIRQ_CMOK);
