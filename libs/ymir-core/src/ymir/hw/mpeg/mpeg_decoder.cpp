@@ -24,8 +24,6 @@ struct MPEGVideoDecoder::Impl {
 
     void Destroy() {
         if (plm != nullptr) {
-            // plm owns and destroys the buffer because create_with_buffer(..., TRUE)
-            // is used in Reset().
             plm_destroy(plm);
             plm = nullptr;
             buffer = nullptr;
@@ -40,7 +38,7 @@ struct MPEGVideoDecoder::Impl {
         buffer = plm_buffer_create_for_appending(64 * 1024);
         plm = plm_create_with_buffer(buffer, TRUE);
         plm_set_video_enabled(plm, TRUE);
-        plm_set_audio_enabled(plm, FALSE);
+        plm_set_audio_enabled(plm, TRUE);
     }
 };
 
@@ -101,6 +99,21 @@ double MPEGVideoDecoder::GetFrameRate() const {
     return plm_get_framerate(m_impl->plm);
 }
 
+bool MPEGVideoDecoder::HasAudio() const {
+    assert(m_impl != nullptr);
+    return plm_get_num_audio_streams(m_impl->plm) > 0;
+}
+
+uint32 MPEGVideoDecoder::GetAudioSampleRate() const {
+    assert(m_impl != nullptr);
+    if (plm_get_num_audio_streams(m_impl->plm) == 0) {
+        return 0;
+    }
+    // plm doesn't expose the audio decoder directly, but the high-level API
+    // always uses 44100Hz for MPEG-1 Layer II.
+    return 44100;
+}
+
 std::optional<DecodedVideoFrame> MPEGVideoDecoder::DecodeFrame() {
     assert(m_impl != nullptr);
 
@@ -115,10 +128,35 @@ std::optional<DecodedVideoFrame> MPEGVideoDecoder::DecodeFrame() {
     frame.height = plmFrame->height;
     frame.pixelsXBGR8888.assign(static_cast<size_t>(frame.width) * frame.height, 0xFF000000u);
 
-    // plm writes RGBA byte order. On little-endian hosts this is exactly the
-    // uint32 layout used by Ymir's software framebuffer: 0xAABBGGRR.
     plm_frame_to_rgba(plmFrame, reinterpret_cast<uint8 *>(frame.pixelsXBGR8888.data()), frame.width * sizeof(uint32));
+
     return frame;
+}
+
+std::optional<DecodedAudioFrame> MPEGVideoDecoder::DecodeAudio() {
+    assert(m_impl != nullptr);
+
+    plm_samples_t *plmSamples = plm_decode_audio(m_impl->plm);
+    if (plmSamples == nullptr) {
+        return std::nullopt;
+    }
+
+    DecodedAudioFrame audio{};
+    audio.time = plmSamples->time;
+
+    // Convert float [-1.0, 1.0] to sint16
+    for (uint32 i = 0; i < DecodedAudioFrame::kSamplesPerFrame * 2; ++i) {
+        float sample = plmSamples->interleaved[i];
+        // Clamp to [-1.0, 1.0] and scale to sint16 range
+        if (sample > 1.0f) {
+            sample = 1.0f;
+        } else if (sample < -1.0f) {
+            sample = -1.0f;
+        }
+        audio.samples[i] = static_cast<sint16>(sample * 32767.0f);
+    }
+
+    return audio;
 }
 
 } // namespace ymir::mpeg

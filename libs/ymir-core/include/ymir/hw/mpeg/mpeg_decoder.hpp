@@ -18,6 +18,15 @@ struct DecodedVideoFrame {
     std::vector<uint32> pixelsXBGR8888;
 };
 
+// Decoded MPEG-1 audio frame (MP2).
+// Contains PLM_AUDIO_SAMPLES_PER_FRAME (1152) stereo samples as interleaved
+// sint16 L,R,L,R,... normalized from plm's float output.
+struct DecodedAudioFrame {
+    double time = 0.0;
+    static constexpr uint32 kSamplesPerFrame = 1152;
+    std::array<sint16, kSamplesPerFrame * 2> samples; // interleaved L/R
+};
+
 class MPEGVideoDecoder {
 public:
     MPEGVideoDecoder();
@@ -39,7 +48,11 @@ public:
     [[nodiscard]] uint32 GetHeight() const;
     [[nodiscard]] double GetFrameRate() const;
 
+    [[nodiscard]] bool HasAudio() const;
+    [[nodiscard]] uint32 GetAudioSampleRate() const;
+
     [[nodiscard]] std::optional<DecodedVideoFrame> DecodeFrame();
+    [[nodiscard]] std::optional<DecodedAudioFrame> DecodeAudio();
 
 private:
     struct Impl;

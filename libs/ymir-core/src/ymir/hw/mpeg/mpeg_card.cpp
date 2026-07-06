@@ -13,6 +13,7 @@ MPEGCard &MPEGCard::operator=(MPEGCard &&) noexcept = default;
 void MPEGCard::Reset() {
     m_decoder.Reset();
     m_currentFrame.reset();
+    m_currentAudio.reset();
     m_status = MPEGCardStatus::Stopped;
     m_interruptFlags = kMPEGCardInterruptNone;
     m_endOfStream = false;
@@ -64,6 +65,20 @@ bool MPEGCard::DecodeNextFrame() {
     return true;
 }
 
+bool MPEGCard::DecodeNextAudioFrame() {
+    if (m_status != MPEGCardStatus::Playing) {
+        return false;
+    }
+
+    auto audio = m_decoder.DecodeAudio();
+    if (!audio.has_value()) {
+        return false;
+    }
+
+    m_currentAudio = std::move(audio);
+    return true;
+}
+
 MPEGCardStatus MPEGCard::GetStatus() const {
     return m_status;
 }
@@ -84,6 +99,14 @@ double MPEGCard::GetFrameRate() const {
     return m_decoder.GetFrameRate();
 }
 
+bool MPEGCard::HasAudio() const {
+    return m_decoder.HasAudio();
+}
+
+uint32 MPEGCard::GetAudioSampleRate() const {
+    return m_decoder.GetAudioSampleRate();
+}
+
 bool MPEGCard::HasCurrentFrame() const {
     return m_currentFrame.has_value();
 }
@@ -91,6 +114,15 @@ bool MPEGCard::HasCurrentFrame() const {
 const DecodedVideoFrame &MPEGCard::GetCurrentFrame() const {
     assert(m_currentFrame.has_value());
     return *m_currentFrame;
+}
+
+bool MPEGCard::HasCurrentAudio() const {
+    return m_currentAudio.has_value();
+}
+
+const DecodedAudioFrame &MPEGCard::GetCurrentAudio() const {
+    assert(m_currentAudio.has_value());
+    return *m_currentAudio;
 }
 
 MPEGCardInterruptFlags MPEGCard::PeekInterruptFlags() const {

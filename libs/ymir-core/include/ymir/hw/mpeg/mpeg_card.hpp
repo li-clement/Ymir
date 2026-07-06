@@ -43,6 +43,7 @@ public:
     void SignalEndOfStream();
 
     [[nodiscard]] bool DecodeNextFrame();
+    [[nodiscard]] bool DecodeNextAudioFrame();
 
     [[nodiscard]] MPEGCardStatus GetStatus() const;
 
@@ -51,8 +52,14 @@ public:
     [[nodiscard]] uint32 GetHeight() const;
     [[nodiscard]] double GetFrameRate() const;
 
+    [[nodiscard]] bool HasAudio() const;
+    [[nodiscard]] uint32 GetAudioSampleRate() const;
+
     [[nodiscard]] bool HasCurrentFrame() const;
     [[nodiscard]] const DecodedVideoFrame &GetCurrentFrame() const;
+
+    [[nodiscard]] bool HasCurrentAudio() const;
+    [[nodiscard]] const DecodedAudioFrame &GetCurrentAudio() const;
 
     [[nodiscard]] MPEGCardInterruptFlags PeekInterruptFlags() const;
     [[nodiscard]] MPEGCardInterruptFlags TakeInterruptFlags();
@@ -61,6 +68,7 @@ public:
 private:
     MPEGVideoDecoder m_decoder;
     std::optional<DecodedVideoFrame> m_currentFrame;
+    std::optional<DecodedAudioFrame> m_currentAudio;
     MPEGCardStatus m_status = MPEGCardStatus::Stopped;
     MPEGCardInterruptFlags m_interruptFlags = kMPEGCardInterruptNone;
     bool m_endOfStream = false;
