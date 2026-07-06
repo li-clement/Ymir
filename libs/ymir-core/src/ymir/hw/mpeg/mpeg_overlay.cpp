@@ -5,8 +5,8 @@
 
 namespace ymir::mpeg {
 
-void MPEGVideoOverlay::BlitLatestFrame(std::span<uint32> framebuffer, uint32 fbWidth, uint32 fbHeight) {
-    auto &card = MPEGCard::GetGlobal();
+void MPEGVideoOverlay::BlitLatestFrame(const MPEGCard &card, std::span<uint32> framebuffer, uint32 fbWidth,
+                                       uint32 fbHeight) {
     if (!card.HasCurrentFrame()) {
         return;
     }

@@ -107,9 +107,4 @@ void MPEGCard::ClearInterruptFlags(MPEGCardInterruptFlags flags) {
     m_interruptFlags &= ~flags;
 }
 
-MPEGCard &MPEGCard::GetGlobal() {
-    static MPEGCard g_card;
-    return g_card;
-}
-
 } // namespace ymir::mpeg

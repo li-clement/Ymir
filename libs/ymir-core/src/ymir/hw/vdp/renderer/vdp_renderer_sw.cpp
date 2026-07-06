@@ -558,6 +558,15 @@ void SoftwareVDPRenderer::VDP2EndFrame() {
     SwCallbacks.FrameComplete(m_framebuffer.data(), m_HRes, m_VRes);
 }
 
+void SoftwareVDPRenderer::DrawMPEGVideoOverlay() {
+    if (m_mpegCard == nullptr) {
+        return;
+    }
+    mpeg::MPEGVideoOverlay overlay;
+    overlay.BlitLatestFrame(*m_mpegCard, std::span<uint32>{m_framebuffer.data(), static_cast<size_t>(m_HRes) * m_VRes},
+                            m_HRes, m_VRes);
+}
+
 // -----------------------------------------------------------------------------
 // Debugger
 

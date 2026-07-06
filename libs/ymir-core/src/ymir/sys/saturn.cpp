@@ -151,6 +151,11 @@ Saturn::Saturn()
 
     ConfigureAccessCycles(false);
 
+    // Wire Movie Card video overlay into the software VDP renderer.
+    if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+        swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
+    }
+
     m_enableDebugTracing = false;
     m_emulateSH2Caches = false;
     UpdateFunctionPointers();

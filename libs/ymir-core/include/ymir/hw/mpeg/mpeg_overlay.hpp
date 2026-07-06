@@ -13,7 +13,9 @@ namespace ymir::mpeg {
 // This is a temporary MVP path: real EXBG / native EXBG integration with VDP2 will replace it.
 class MPEGVideoOverlay {
 public:
-    void BlitLatestFrame(std::span<uint32> framebuffer, uint32 fbWidth, uint32 fbHeight);
+    // Blits the latest frame from the given MPEGCard instance.
+    // The caller must ensure the card lifetime exceeds the call.
+    void BlitLatestFrame(const MPEGCard &card, std::span<uint32> framebuffer, uint32 fbWidth, uint32 fbHeight);
 };
 
 } // namespace ymir::mpeg

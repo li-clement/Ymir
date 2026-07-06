@@ -12,7 +12,7 @@ using namespace ymir;
 using namespace ymir::test::mpeg_fixtures;
 
 TEST_CASE("MPEG video overlay blits latest decoded frame into a software framebuffer", "[mpeg][movie-card][overlay]") {
-    auto &card = mpeg::MPEGCard::GetGlobal();
+    mpeg::MPEGCard card;
     card.Initialize();
     card.AppendStreamData(kTinyMpegProgramStream);
     card.SignalEndOfStream();
@@ -26,7 +26,7 @@ TEST_CASE("MPEG video overlay blits latest decoded frame into a software framebu
     fb.fill(0xFF112233u);
 
     mpeg::MPEGVideoOverlay overlay;
-    overlay.BlitLatestFrame(std::span<uint32>{fb.data(), fb.size()}, 32, 32);
+    overlay.BlitLatestFrame(card, std::span<uint32>{fb.data(), fb.size()}, 32, 32);
 
     for (uint32 y = 0; y < 16; ++y) {
         for (uint32 x = 0; x < 16; ++x) {
@@ -42,13 +42,13 @@ TEST_CASE("MPEG video overlay blits latest decoded frame into a software framebu
 }
 
 TEST_CASE("MPEG video overlay does nothing when no frame is decoded", "[mpeg][movie-card][overlay]") {
-    auto &card = mpeg::MPEGCard::GetGlobal();
+    mpeg::MPEGCard card;
     card.Reset();
 
     std::array<uint32, 16 * 16> fb{};
     fb.fill(0xFF112233u);
 
     mpeg::MPEGVideoOverlay overlay;
-    overlay.BlitLatestFrame(std::span<uint32>{fb.data(), fb.size()}, 16, 16);
+    overlay.BlitLatestFrame(card, std::span<uint32>{fb.data(), fb.size()}, 16, 16);
     CHECK(fb[0] == 0xFF112233u);
 }
