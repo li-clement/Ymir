@@ -14,6 +14,7 @@ void MPEGCard::Reset() {
     m_decoder.Reset();
     m_currentFrame.reset();
     m_currentAudio.reset();
+    m_audioSampleIndex = 0;
     m_status = MPEGCardStatus::Stopped;
     m_interruptFlags = kMPEGCardInterruptNone;
     m_endOfStream = false;
@@ -26,6 +27,7 @@ void MPEGCard::Initialize() {
 void MPEGCard::StartPlayback() {
     if (m_status != MPEGCardStatus::Error) {
         m_status = MPEGCardStatus::Playing;
+        m_audioSampleIndex = 0;
     }
 }
 
@@ -123,6 +125,26 @@ bool MPEGCard::HasCurrentAudio() const {
 const DecodedAudioFrame &MPEGCard::GetCurrentAudio() const {
     assert(m_currentAudio.has_value());
     return *m_currentAudio;
+}
+
+bool MPEGCard::GetNextAudioSample(sint16 &left, sint16 &right) {
+    if (m_status != MPEGCardStatus::Playing || !m_decoder.HasAudio()) {
+        return false;
+    }
+
+    // Decode next audio frame if current one is exhausted or absent
+    if (!m_currentAudio.has_value() || m_audioSampleIndex >= DecodedAudioFrame::kSamplesPerFrame) {
+        if (!DecodeNextAudioFrame()) {
+            return false;
+        }
+        m_audioSampleIndex = 0;
+    }
+
+    const uint32 idx = m_audioSampleIndex * 2;
+    left = m_currentAudio->samples[idx + 0];
+    right = m_currentAudio->samples[idx + 1];
+    ++m_audioSampleIndex;
+    return true;
 }
 
 MPEGCardInterruptFlags MPEGCard::PeekInterruptFlags() const {

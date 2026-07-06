@@ -61,6 +61,11 @@ public:
     [[nodiscard]] bool HasCurrentAudio() const;
     [[nodiscard]] const DecodedAudioFrame &GetCurrentAudio() const;
 
+    // Retrieves the next stereo audio sample from the decoded audio stream.
+    // Automatically decodes the next audio frame when the current one is exhausted.
+    // Returns false if playback is stopped, no audio stream exists, or the stream has ended.
+    bool GetNextAudioSample(sint16 &left, sint16 &right);
+
     [[nodiscard]] MPEGCardInterruptFlags PeekInterruptFlags() const;
     [[nodiscard]] MPEGCardInterruptFlags TakeInterruptFlags();
     void ClearInterruptFlags(MPEGCardInterruptFlags flags);
@@ -69,6 +74,7 @@ private:
     MPEGVideoDecoder m_decoder;
     std::optional<DecodedVideoFrame> m_currentFrame;
     std::optional<DecodedAudioFrame> m_currentAudio;
+    uint32 m_audioSampleIndex = 0; // position within m_currentAudio
     MPEGCardStatus m_status = MPEGCardStatus::Stopped;
     MPEGCardInterruptFlags m_interruptFlags = kMPEGCardInterruptNone;
     bool m_endOfStream = false;

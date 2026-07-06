@@ -61,3 +61,60 @@ TEST_CASE("MPEGCard audio frame has correct sample count", "[mpeg][movie-card][a
     CHECK(mpeg::DecodedAudioFrame::kSamplesPerFrame == 1152);
     CHECK(mpeg::DecodedAudioFrame{}.samples.size() == 1152 * 2);
 }
+
+TEST_CASE("MPEGCard GetNextAudioSample returns false when stopped", "[mpeg][movie-card][audio]") {
+    mpeg::MPEGCard card;
+
+    card.Initialize();
+    card.AppendStreamData(kTinyMpegProgramStreamWithAudio);
+    card.SignalEndOfStream();
+
+    // Not started -> should not produce audio
+    sint16 left, right;
+    CHECK_FALSE(card.GetNextAudioSample(left, right));
+}
+
+TEST_CASE("MPEGCard GetNextAudioSample returns false on video-only stream", "[mpeg][movie-card][audio]") {
+    mpeg::MPEGCard card;
+
+    card.Initialize();
+    card.StartPlayback();
+    card.AppendStreamData(kTinyMpegProgramStream);
+    card.SignalEndOfStream();
+
+    REQUIRE(card.HasHeaders());
+    CHECK_FALSE(card.HasAudio());
+
+    sint16 left, right;
+    CHECK_FALSE(card.GetNextAudioSample(left, right));
+}
+
+TEST_CASE("MPEGCard GetNextAudioSample decodes and returns samples from audio stream",
+          "[mpeg][movie-card][audio]") {
+    mpeg::MPEGCard card;
+
+    card.Initialize();
+    card.StartPlayback();
+    card.AppendStreamData(kTinyMpegProgramStreamWithAudio);
+    card.SignalEndOfStream();
+
+    REQUIRE(card.HasHeaders());
+    REQUIRE(card.HasAudio());
+    CHECK(card.GetAudioSampleRate() == 44100);
+
+    // GetNextAudioSample should auto-decode the first audio frame and return samples
+    sint16 left, right;
+    REQUIRE(card.GetNextAudioSample(left, right));
+
+    // Verify subsequent samples come from the same frame (sequential read of 1152 samples)
+    uint32 count = 1;
+    while (count < mpeg::DecodedAudioFrame::kSamplesPerFrame) {
+        REQUIRE(card.GetNextAudioSample(left, right));
+        ++count;
+    }
+
+    // After consuming all 1152 samples, the next call should auto-decode the next frame
+    // (or return false if the stream has ended)
+    // The tiny fixture has very few audio frames, so it may end here
+    card.GetNextAudioSample(left, right); // may succeed or fail depending on stream length
+}
