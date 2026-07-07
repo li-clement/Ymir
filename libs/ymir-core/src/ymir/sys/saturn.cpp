@@ -289,6 +289,7 @@ void Saturn::LoadDisc(media::Disc &&disc) {
     // Auto-enable Movie Card for games that require it
     if (hasFlag(db::GameInfo::Flags::MovieCard)) {
         configuration.cdblock.movieCardEnabled = true;
+        configuration.NotifyObservers();
     }
 }
 
