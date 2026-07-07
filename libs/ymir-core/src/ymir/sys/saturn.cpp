@@ -285,6 +285,11 @@ void Saturn::LoadDisc(media::Disc &&disc) {
     VDP.vdp2AccessPatternsConfig.relaxedBitmapCPAccessChecks =
         hasFlag(db::GameInfo::Flags::RelaxedVDP2BitmapCPAccessChecks);
     VDP.SetVirtuaGunJitter(hasFlag(db::GameInfo::Flags::VirtuaGunJitter));
+
+    // Auto-enable Movie Card for games that require it
+    if (hasFlag(db::GameInfo::Flags::MovieCard)) {
+        configuration.cdblock.movieCardEnabled = true;
+    }
 }
 
 void Saturn::EjectDisc() {
