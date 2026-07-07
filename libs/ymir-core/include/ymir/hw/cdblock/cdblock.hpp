@@ -63,6 +63,13 @@ public:
 
     void SetMovieCardPresent(bool present) {
         m_movieCardPresent = present;
+        // On a real Hi-Saturn, the CD Block starts with the MPEG card already
+        // authenticated. Simulate this by setting mpegAuthStatus to 2 when the
+        // card is present, so the game can probe the card without first calling
+        // MpegInit.
+        if (present) {
+            m_mpegAuthStatus = 2;
+        }
     }
 
     // -------------------------------------------------------------------------
