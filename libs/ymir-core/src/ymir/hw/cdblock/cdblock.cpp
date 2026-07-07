@@ -1805,7 +1805,7 @@ void CDBlock::CmdGetStatus() {
 }
 
 void CDBlock::CmdGetHardwareInfo() {
-    devlog::trace<grp::cmd>("-> Get hardware info");
+    devlog::info<grp::cmd>("-> Get hardware info (mpegAuth={}, cardPresent={})", m_mpegAuthStatus, m_movieCardPresent);
 
     // Input structure:
     // 0x01     <blank>
@@ -3266,7 +3266,7 @@ void CDBlock::CmdAbortFile() {
 }
 
 void CDBlock::CmdMpegGetStatus() {
-    devlog::trace<grp::cmd>("-> MPEG get status");
+    devlog::info<grp::cmd>("-> MPEG get status (auth={}, cardPresent={})", m_mpegAuthStatus, m_movieCardPresent);
 
     uint16 status = 0x0000;
     switch (m_mpegCard.GetStatus()) {
@@ -3311,7 +3311,7 @@ void CDBlock::CmdMpegSetInterruptMask() {
 }
 
 void CDBlock::CmdMpegInit() {
-    devlog::trace<grp::cmd>("-> MPEG init");
+    devlog::info<grp::cmd>("-> MPEG init");
 
     m_mpegCard.Initialize();
     if (m_mpegAuthStatus != 2) {
@@ -3337,7 +3337,7 @@ void CDBlock::CmdMpegSetMode() {
 }
 
 void CDBlock::CmdMpegPlay() {
-    devlog::trace<grp::cmd>("-> MPEG play");
+    devlog::info<grp::cmd>("-> MPEG play");
     m_mpegCard.StartPlayback();
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
