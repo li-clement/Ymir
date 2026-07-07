@@ -1820,6 +1820,9 @@ void CDBlock::CmdGetHardwareInfo() {
     // drive version    drive revision
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0x0002;
+    // On a real Hi-Saturn, the CD Block starts with the MPEG card already
+    // authenticated and ready. The game probes via GetHardwareInfo BEFORE
+    // calling MpegInit, so the card must report as present from the start.
     m_RR[2] = (m_mpegAuthStatus == 2 || m_movieCardPresent) ? 0x0001 : 0x0000;
     m_RR[3] = 0x0600;
 
@@ -3276,7 +3279,11 @@ void CDBlock::CmdMpegGetStatus() {
     case mpeg::MPEGCardStatus::Error: status = 0x00FF; break;
     }
 
-    m_RR[0] = (m_mpegAuthStatus == 2 ? GetStatusCode() : 0xFF) << 8u;
+    // On a real Hi-Saturn, the CD Block starts with the MPEG card already authenticated
+    // and ready. The game probes with MpegGetStatus BEFORE calling MpegInit, and
+    // if the card reports 0xFF (unauthenticated), the game concludes no card is present.
+    // When m_movieCardPresent is true, report the card as ready from the start.
+    m_RR[0] = ((m_mpegAuthStatus == 2 || m_movieCardPresent) ? GetStatusCode() : 0xFF) << 8u;
     m_RR[1] = status;
     m_RR[2] = (m_mpegCard.GetWidth() << 8u) | (m_mpegCard.GetHeight() & 0xFFu);
     m_RR[3] = 0;
