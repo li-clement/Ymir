@@ -178,6 +178,14 @@ private:
     uint16 m_mpegMode;
     uint16 m_mpegDecodingMethod;
 
+    // MPEG connection state (matching Kronos mpegcon_struct)
+    uint8 m_mpegAudCon = 0;
+    uint8 m_mpegAudLay = 0;
+    uint8 m_mpegAudBufNum = 0xFF;
+    uint8 m_mpegVidCon = 0;
+    uint8 m_mpegVidLay = 0;
+    uint8 m_mpegVidBufNum = 0xFF;
+
     bool m_movieCardPresent = true; // MPEG card is always present in HLE
 
     bool SetupGenericPlayback(uint32 startParam, uint32 endParam, uint16 repeatParam);
