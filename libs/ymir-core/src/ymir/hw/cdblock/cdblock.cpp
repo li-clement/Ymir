@@ -1288,11 +1288,20 @@ void CDBlock::CheckPlayEnd() {
         m_status.frameAddress = m_playEndPos + 1;
         m_targetDriveCycles = kDriveCyclesNotPlaying;
 
-        // Only trigger HIRQ_PEND for CD playback end.
-        // Do NOT trigger MPEG HIRQ bits - they cause the game to enter
-        // a polling loop waiting for MPEG state that never resolves.
-        // The game detects CD playback end via HIRQ_PEND and proceeds.
+        // Signal MPEG end-of-stream so MpegGetStatus reports videoEnded=true.
+        // The game will then see statusCode=0xFF (card removed) and exit
+        // the MPEG polling loop to proceed to gameplay.
+        if (m_mpegAuthStatus == 2) {
+            m_mpegCard.SignalEndOfStream();
+        }
+
+        // Trigger HIRQ_PEND for CD playback end, and HIRQ_MPCM for MPEG
+        // stream end. The game's interrupt handler uses these to break
+        // out of the MpegGetStatus polling loop and proceed to gameplay.
         uint16 hirq = kHIRQ_PEND;
+        if (m_mpegAuthStatus == 2) {
+            hirq |= kHIRQ_MPCM | kHIRQ_MPED | kHIRQ_MPST;
+        }
         if (m_playFile) {
             hirq |= kHIRQ_EFLS | kHIRQ_EHST;
         }
@@ -3330,24 +3339,21 @@ void CDBlock::CmdAbortFile() {
 }
 
 void CDBlock::CmdMpegGetStatus() {
-    // Match Kronos doMPEGReport format:
-    // CR1 = (status << 8) | actionstatus
-    // CR2 = vcounter
-    // CR3 = (pictureinfo << 8) | mpegaudiostatus
-    // CR4 = mpegvideostatus
-    //
-    // Match Kronos exactly: always return all-zero status fields.
-    // The game detects playback end via HIRQ_PEND, not MpegGetStatus bits.
-    // Setting any bits (display, playing, etc.) causes the game to loop forever.
-    devlog::info<grp::cmd>("--> MPEG get status (auth={}, cardPresent={}, m_CR={:04X} {:04X} {:04X} {:04X})",
-        m_mpegAuthStatus, m_movieCardPresent, m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+    // Always report the MPEG card as removed (statusCode=0xFF).
+    // This matches Kronos behavior where the MPEG card is a no-op and
+    // the game proceeds to gameplay without playing the video.
+    // The video overlay in MPEGCard is still functional (decoded frames
+    // are blitted to VDP), but the game never sees MPEG activity and
+    // skips the video sequence entirely.
+    devlog::info<grp::cmd>("--> MPEG get status (auth={}, cardPresent={})",
+        m_mpegAuthStatus, m_movieCardPresent);
 
-    m_RR[0] = ((m_mpegAuthStatus == 2 || m_movieCardPresent) ? GetStatusCode() : 0xFF) << 8u;
+    m_RR[0] = 0xFF << 8u; // statusCode=0xFF (card removed)
     m_RR[1] = 0; // vcounter
     m_RR[2] = 0; // pictureinfo | mpegaudiostatus
     m_RR[3] = 0; // mpegvideostatus
 
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+    SetInterrupt(kHIRQ_CMOK);
 }
 
 void CDBlock::CmdMpegGetInterrupt() {

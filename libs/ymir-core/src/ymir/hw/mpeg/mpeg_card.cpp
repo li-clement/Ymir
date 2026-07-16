@@ -51,13 +51,17 @@ void MPEGCard::AppendStreamData(std::span<const uint8> data) {
 void MPEGCard::SignalEndOfStream() {
     m_endOfStream = true;
     m_decoder.SignalEndOfStream();
-    // Transition to Ended immediately rather than waiting for pl_mpeg to
-    // exhaust its internal buffer, which can take many frames and causes
-    // the game to time out while polling MpegGetStatus.
-    if (m_status == MPEGCardStatus::Playing) {
+    // Transition to Ended so MpegGetStatus can report videoEnded=true.
+    // The game uses this to exit the MPEG polling loop.
+    if (m_status != MPEGCardStatus::Error) {
         m_status = MPEGCardStatus::Ended;
         m_interruptFlags |= kMPEGCardInterruptStreamEnded;
     }
+    // Clear the current decoded frame so the VDP overlay stops displaying
+    // the last video frame over the title screen / gameplay.
+    m_currentFrame.reset();
+    m_currentAudio.reset();
+    m_audioSampleIndex = 0;
 }
 
 bool MPEGCard::DecodeNextFrame() {
