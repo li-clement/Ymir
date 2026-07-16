@@ -1,5 +1,7 @@
 #include <ymir/hw/mpeg/mpeg_card.hpp>
 
+#include <fmt/format.h>
+
 #include <cassert>
 #include <utility>
 
@@ -40,27 +42,41 @@ void MPEGCard::StopPlayback() {
 void MPEGCard::AppendStreamData(std::span<const uint8> data) {
     if (!data.empty()) {
         m_decoder.Append(data);
+        // Do not auto-transition to Playing state.
+        // The game checks MpegGetStatus and expects Stopped (0000) even
+        // during video playback, matching Kronos behavior.
     }
 }
 
 void MPEGCard::SignalEndOfStream() {
     m_endOfStream = true;
     m_decoder.SignalEndOfStream();
+    // Transition to Ended immediately rather than waiting for pl_mpeg to
+    // exhaust its internal buffer, which can take many frames and causes
+    // the game to time out while polling MpegGetStatus.
+    if (m_status == MPEGCardStatus::Playing) {
+        m_status = MPEGCardStatus::Ended;
+        m_interruptFlags |= kMPEGCardInterruptStreamEnded;
+    }
 }
 
 bool MPEGCard::DecodeNextFrame() {
-    if (m_status != MPEGCardStatus::Playing) {
-        return false;
-    }
-
+    // Decode frames regardless of card status (Stopped/Playing/Ended).
+    // The card status is kept at Stopped for game compatibility (matching
+    // Kronos), but we still need to decode video frames for the overlay.
     auto frame = m_decoder.DecodeFrame();
     if (!frame.has_value()) {
+        static int no_frame_count = 0;
+        if (no_frame_count++ % 60 == 0) {
+            fmt::print(stderr, "MPEGCard: DecodeFrame returned no frame. EOS={}\n", m_endOfStream);
+        }
         if (m_endOfStream) {
             m_status = MPEGCardStatus::Ended;
             m_interruptFlags |= kMPEGCardInterruptStreamEnded;
         }
         return false;
     }
+    fmt::print(stderr, "MPEGCard: DecodeFrame successful! {}x{}\n", frame->width, frame->height);
 
     m_currentFrame = std::move(frame);
     m_interruptFlags |= kMPEGCardInterruptFrameDecoded;
