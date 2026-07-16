@@ -125,7 +125,8 @@ void CDBlock::Reset(bool hard) {
     m_readSpeed = 1;
 
     m_discAuthStatus = 0;
-    m_mpegAuthStatus = 0;
+    // 模拟 Hi-Saturn 行为：Movie Card 存在时保留认证状态
+    m_mpegAuthStatus = m_movieCardPresent ? 2 : 0;
     m_mpegCard.Reset();
     m_mpegInterruptMask = 0;
     m_mpegConnection = 0xFFFF;
@@ -133,6 +134,12 @@ void CDBlock::Reset(bool hard) {
     m_mpegDisplay = 0;
     m_mpegMode = 0;
     m_mpegDecodingMethod = 0;
+    m_mpegAudCon = 0;
+    m_mpegAudLay = 0;
+    m_mpegAudBufNum = 0xFF;
+    m_mpegVidCon = 0;
+    m_mpegVidLay = 0;
+    m_mpegVidBufNum = 0xFF;
 
     if (hard) {
         m_HIRQ = 0x0BE1;
@@ -1120,10 +1127,18 @@ void CDBlock::ProcessDriveStatePlay() {
                                 devlog::trace<grp::play>("Passed filter; output disconnected - discarded");
                             } else {
                                 assert(filter.passOutput < m_filters.size());
-                                devlog::trace<grp::play>("Passed filter; sent to buffer partition {}",
-                                                         filter.passOutput);
-                                m_partitionManager.InsertHead(filter.passOutput, buffer);
-                                FeedMPEGStream(filter.passOutput, buffer);
+                                // If this partition is connected to the MPEG decoder,
+                                // feed data directly to the decoder and skip partition
+                                // buffer insertion to avoid buffer exhaustion.
+                                if (m_mpegAuthStatus == 2 &&
+                                    (filter.passOutput == m_mpegAudBufNum ||
+                                     filter.passOutput == m_mpegVidBufNum)) {
+                                    FeedMPEGStream(filter.passOutput, buffer);
+                                } else {
+                                    devlog::trace<grp::play>("Passed filter; sent to buffer partition {}",
+                                                             filter.passOutput);
+                                    m_partitionManager.InsertHead(filter.passOutput, buffer);
+                                }
                                 m_lastCDWritePartition = filter.passOutput;
                                 SetInterrupt(kHIRQ_CSCT);
                             }
@@ -1203,21 +1218,66 @@ void CDBlock::ProcessDriveStatePlay() {
 }
 
 void CDBlock::FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer) {
-    if (m_mpegAuthStatus != 2 || m_mpegCard.GetStatus() != mpeg::MPEGCardStatus::Playing) {
+    if (m_mpegAuthStatus != 2) {
         return;
     }
-    if (m_mpegConnection != partitionIndex) {
+    // Check if this partition is connected to the MPEG decoder.
+    // audbufnum and vidbufnum from MpegSetConnection specify which partitions
+    // receive audio and video data respectively.
+    if (partitionIndex != m_mpegAudBufNum && partitionIndex != m_mpegVidBufNum) {
         return;
     }
 
+    uint32 offset = 0;
+    uint32 size = buffer.size;
+
     const bool mode1 = buffer.data[0xF] == 0x01;
     const bool mode2 = buffer.data[0xF] == 0x02;
-    const uint32 offset = (mode1 || mode2) ? 16u : 0u;
-    const uint32 size = std::min<size_t>(buffer.size, buffer.data.size() - offset);
+
+    if (mode2) {
+        offset = 24u; // Skip 16-byte Header + 8-byte Subheader
+        if ((buffer.subheader.submode & 0x20) != 0) {
+            size = 2324u; // Form 2 payload size
+        } else {
+            size = 2048u; // Form 1 payload size
+        }
+    } else if (mode1) {
+        offset = 16u; // Skip 16-byte Header
+        size = 2048u; // Mode 1 payload size
+    }
+
+    size = std::min<size_t>(size, buffer.data.size() - offset);
     if (size == 0) {
         return;
     }
 
+    // Scan for MPEG-1 Program Stream pack start code (0x00 0x00 0x01 0xBA).
+    // The start code may not be at the beginning of the first sector because
+    // CD-XA sectors can contain padding. Scan the entire payload.
+    bool hasMpegStartCode = false;
+    for (uint32 i = 0; i + 3 < size; i++) {
+        if (buffer.data[offset + i] == 0x00 &&
+            buffer.data[offset + i + 1] == 0x00 &&
+            buffer.data[offset + i + 2] == 0x01 &&
+            buffer.data[offset + i + 3] == 0xBA) {
+            hasMpegStartCode = true;
+            // Adjust offset to start from the pack start code
+            offset += i;
+            size -= i;
+            break;
+        }
+    }
+    if (!hasMpegStartCode) {
+        // Not an MPEG sector - skip without feeding to decoder
+        static int skipCount = 0;
+        if (skipCount++ % 100 == 0) {
+            devlog::debug<grp::base>("FeedMPEGStream: skipped {} non-MPEG sectors (partition={}, mode={})", 
+                skipCount, partitionIndex, mode2 ? 2 : (mode1 ? 1 : 0));
+        }
+        return;
+    }
+
+    devlog::info<grp::base>("FeedMPEGStream: feeding {} bytes to MPEG decoder (partition={}, offset={})", size, partitionIndex, offset);
     m_mpegCard.AppendStreamData(std::span<const uint8>{buffer.data}.subspan(offset, size));
 }
 
@@ -1228,6 +1288,10 @@ void CDBlock::CheckPlayEnd() {
         m_status.frameAddress = m_playEndPos + 1;
         m_targetDriveCycles = kDriveCyclesNotPlaying;
 
+        // Only trigger HIRQ_PEND for CD playback end.
+        // Do NOT trigger MPEG HIRQ bits - they cause the game to enter
+        // a polling loop waiting for MPEG state that never resolves.
+        // The game detects CD playback end via HIRQ_PEND and proceeds.
         uint16 hirq = kHIRQ_PEND;
         if (m_playFile) {
             hirq |= kHIRQ_EFLS | kHIRQ_EHST;
@@ -1767,17 +1831,15 @@ FORCE_INLINE void CDBlock::ProcessCommand() {
     case 0x9D: CmdMpegSetStream(); break;
     case 0x9E: CmdMpegGetStream(); break;
     case 0xA0: CmdMpegDisplay(); break;
-        // case 0xA1: CmdMpegSetWindow(); break;
-        // case 0xA2: CmdMpegSetBorderColor(); break;
-        // case 0xA3: CmdMpegSetFade(); break;
-        // case 0xA4: CmdMpegSetVideoEffects(); break;
-        // case 0xAF: CmdMpegSetLSI(); break;
+    case 0xA1: CmdMpegSetWindow(); break;
+    case 0xA2: CmdMpegSetBorderColor(); break;
+    case 0xA3: CmdMpegSetFade(); break;
+    case 0xA4: CmdMpegSetVideoEffects(); break;
+    case 0xAF: CmdMpegSetLSI(); break;
 
     case 0xE0: CmdAuthenticateDevice(); break;
-    case 0xE1:
-        CmdIsDeviceAuthenticated();
-        break;
-        // case 0xE2: CmdGetMpegROM(); break;
+    case 0xE1: CmdIsDeviceAuthenticated(); break;
+    case 0xE2: CmdGetMpegROM(); break;
 
     default:
         devlog::warn<grp::cmd>("Unimplemented command {:02X}", cmd);
@@ -1806,6 +1868,7 @@ void CDBlock::CmdGetStatus() {
 
 void CDBlock::CmdGetHardwareInfo() {
     devlog::info<grp::cmd>("-> Get hardware info (mpegAuth={}, cardPresent={})", m_mpegAuthStatus, m_movieCardPresent);
+    { FILE *f = fopen("/tmp/ymir_mpeg.log", "a"); if (f) { fprintf(f, "GetHWInfo: auth=%d present=%d\n", m_mpegAuthStatus, m_movieCardPresent); fclose(f); } }
 
     // Input structure:
     // 0x01     <blank>
@@ -1819,11 +1882,8 @@ void CDBlock::CmdGetHardwareInfo() {
     // <blank>          MPEG version (0 if unauthenticated)
     // drive version    drive revision
     m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = 0x0002;
-    // On a real Hi-Saturn, the CD Block starts with the MPEG card already
-    // authenticated and ready. The game probes via GetHardwareInfo BEFORE
-    // calling MpegInit, so the card must report as present from the start.
-    m_RR[2] = (m_mpegAuthStatus == 2 || m_movieCardPresent) ? 0x0001 : 0x0000;
+    m_RR[1] = m_movieCardPresent ? 0x0202 : 0x0002;
+    m_RR[2] = (m_mpegAuthStatus == 2) ? 0x0001 : 0x0000;
     m_RR[3] = 0x0600;
 
     SetInterrupt(kHIRQ_CMOK);
@@ -1949,7 +2009,8 @@ void CDBlock::CmdInitializeCDSystem() {
         m_playFile = false;
 
         m_discAuthStatus = 0;
-        m_mpegAuthStatus = 0;
+        // 模拟 Hi-Saturn 行为：Movie Card 存在时保留认证状态
+        m_mpegAuthStatus = m_movieCardPresent ? 2 : 0;
 
         m_partitionManager.Reset();
         for (auto &filter : m_filters) {
@@ -3269,41 +3330,39 @@ void CDBlock::CmdAbortFile() {
 }
 
 void CDBlock::CmdMpegGetStatus() {
-    devlog::info<grp::cmd>("-> MPEG get status (auth={}, cardPresent={})", m_mpegAuthStatus, m_movieCardPresent);
+    // Match Kronos doMPEGReport format:
+    // CR1 = (status << 8) | actionstatus
+    // CR2 = vcounter
+    // CR3 = (pictureinfo << 8) | mpegaudiostatus
+    // CR4 = mpegvideostatus
+    //
+    // Match Kronos exactly: always return all-zero status fields.
+    // The game detects playback end via HIRQ_PEND, not MpegGetStatus bits.
+    // Setting any bits (display, playing, etc.) causes the game to loop forever.
+    devlog::info<grp::cmd>("--> MPEG get status (auth={}, cardPresent={}, m_CR={:04X} {:04X} {:04X} {:04X})",
+        m_mpegAuthStatus, m_movieCardPresent, m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
 
-    uint16 status = 0x0000;
-    switch (m_mpegCard.GetStatus()) {
-    case mpeg::MPEGCardStatus::Stopped: status = 0x0000; break;
-    case mpeg::MPEGCardStatus::Playing: status = 0x0001; break;
-    case mpeg::MPEGCardStatus::Ended: status = 0x0002; break;
-    case mpeg::MPEGCardStatus::Error: status = 0x00FF; break;
-    }
-
-    // On a real Hi-Saturn, the CD Block starts with the MPEG card already authenticated
-    // and ready. The game probes with MpegGetStatus BEFORE calling MpegInit, and
-    // if the card reports 0xFF (unauthenticated), the game concludes no card is present.
-    // When m_movieCardPresent is true, report the card as ready from the start.
     m_RR[0] = ((m_mpegAuthStatus == 2 || m_movieCardPresent) ? GetStatusCode() : 0xFF) << 8u;
-    m_RR[1] = status;
-    m_RR[2] = (m_mpegCard.GetWidth() << 8u) | (m_mpegCard.GetHeight() & 0xFFu);
-    m_RR[3] = 0;
+    m_RR[1] = 0; // vcounter
+    m_RR[2] = 0; // pictureinfo | mpegaudiostatus
+    m_RR[3] = 0; // mpegvideostatus
 
-    SetInterrupt(kHIRQ_CMOK);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegGetInterrupt() {
-    devlog::trace<grp::cmd>("-> MPEG get interrupt");
+    devlog::info<grp::cmd>("-> MPEG get interrupt");
 
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = m_mpegCard.PeekInterruptFlags();
     m_RR[2] = m_mpegInterruptMask;
     m_RR[3] = 0;
 
-    SetInterrupt(kHIRQ_CMOK);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegSetInterruptMask() {
-    devlog::trace<grp::cmd>("-> MPEG set interrupt mask");
+    devlog::info<grp::cmd>("-> MPEG set interrupt mask");
 
     m_mpegInterruptMask = m_CR[1];
     // MVP: treat bits set in the mask command as acknowledged MPEG interrupts.
@@ -3314,112 +3373,178 @@ void CDBlock::CmdMpegSetInterruptMask() {
     m_RR[2] = m_mpegInterruptMask;
     m_RR[3] = 0;
 
-    SetInterrupt(kHIRQ_CMOK);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegInit() {
     devlog::info<grp::cmd>("-> MPEG init");
-
-    m_mpegCard.Initialize();
-    if (m_mpegAuthStatus != 2) {
-        m_mpegAuthStatus = 2;
-    }
-
+    m_mpegCard.Reset();
+    m_mpegConnection = 0x0000; // MUST be 0x0000 so data flows without explicit MPEG set connection!
+    m_mpegStream = 0;
+    m_mpegDisplay = 0;
+    m_mpegMode = 0;
+    m_mpegDecodingMethod = 0;
+    m_mpegAudCon = 0;
+    m_mpegAudLay = 0;
+    m_mpegAudBufNum = 0xFF;
+    m_mpegVidCon = 0;
+    m_mpegVidLay = 0;
+    m_mpegVidBufNum = 0xFF;
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
     m_RR[3] = 0;
-
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegSetMode() {
-    devlog::trace<grp::cmd>("-> MPEG set mode");
+    devlog::info<grp::cmd>("-> MPEG set mode");
     m_mpegMode = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = m_mpegMode;
+    m_RR[1] = 0;
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegPlay() {
     devlog::info<grp::cmd>("-> MPEG play");
-    m_mpegCard.StartPlayback();
+    // Start CD data flow but don't set MPEGCard to Playing state.
+    // The game polls MpegGetStatus and expects to see actionStatus=0000
+    // (not playing) even during playback, matching Kronos behavior.
+    // FeedMPEGStream still feeds data to the decoder for video overlay.
+    // m_mpegCard.StartPlayback(); // <-- intentionally not called
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegSetDecodingMethod() {
-    devlog::trace<grp::cmd>("-> MPEG set decoding method");
+    devlog::info<grp::cmd>("-> MPEG set decoding method");
     m_mpegDecodingMethod = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = m_mpegDecodingMethod;
+    m_RR[1] = 0;
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegSetConnection() {
-    devlog::trace<grp::cmd>("-> MPEG set connection");
-    m_mpegConnection = m_CR[1];
+    // Kronos format (CR indices 0-3 = CR1-CR4):
+    // CR1[0] = cmd, CR1[1] = <blank> | audcon
+    // CR2[1] = audlay | audbufnum
+    // CR3[2] = next_sel | vidcon  (high byte of CR3 selects current/next)
+    // CR4[3] = vidlay | vidbufnum
+    devlog::info<grp::cmd>("-> MPEG set connection (CR1={:04X} CR2={:04X} CR3={:04X} CR4={:04X})", m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+    bool isNext = (m_CR[2] >> 8) != 0;
+    if (!isNext) {
+        m_mpegAudCon = m_CR[0] & 0xFF;
+        m_mpegAudLay = m_CR[1] >> 8;
+        m_mpegAudBufNum = m_CR[1] & 0xFF;
+        m_mpegVidCon = m_CR[2] & 0xFF;
+        m_mpegVidLay = m_CR[3] >> 8;
+        m_mpegVidBufNum = m_CR[3] & 0xFF;
+    }
+    m_mpegConnection = m_CR[0];
     m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = m_mpegConnection;
+    m_RR[1] = m_CR[0];
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegGetConnection() {
-    devlog::trace<grp::cmd>("-> MPEG get connection");
-    m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = m_mpegConnection;
-    m_RR[2] = 0;
-    m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK);
+    // Kronos format:
+    // CR1 = (status << 8) | audcon
+    // CR2 = (audlay << 8) | audbufnum
+    // CR3 = vidcon
+    // CR4 = (vidlay << 8) | vidbufnum
+    //
+    // After init, audbufnum=0xFF and vidbufnum=0xFF (disconnected).
+    // The game checks these buffer numbers to determine if MPEG buffers are valid.
+    devlog::info<grp::cmd>("-> MPEG get connection");
+    m_RR[0] = (GetStatusCode() << 8u) | (m_mpegAudCon & 0xFFu);
+    m_RR[1] = ((m_mpegAudLay & 0xFFu) << 8u) | (m_mpegAudBufNum & 0xFFu);
+    m_RR[2] = m_mpegVidCon & 0xFFu;
+    m_RR[3] = ((m_mpegVidLay & 0xFFu) << 8u) | (m_mpegVidBufNum & 0xFFu);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegSetStream() {
-    devlog::trace<grp::cmd>("-> MPEG set stream");
+    devlog::info<grp::cmd>("-> MPEG set stream");
     m_mpegStream = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = m_mpegStream;
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegGetStream() {
-    devlog::trace<grp::cmd>("-> MPEG get stream");
+    devlog::info<grp::cmd>("-> MPEG get stream");
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = m_mpegStream;
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegDisplay() {
-    devlog::trace<grp::cmd>("-> MPEG display");
+    devlog::info<grp::cmd>("-> MPEG display (CR={:04X} {:04X} {:04X} {:04X})", m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
     m_mpegDisplay = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = m_mpegDisplay;
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
-void CDBlock::CmdMpegSetWindow() {}
+void CDBlock::CmdMpegSetWindow() {
+    devlog::info<grp::cmd>("-> MPEG set window");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
-void CDBlock::CmdMpegSetBorderColor() {}
+void CDBlock::CmdMpegSetBorderColor() {
+    devlog::info<grp::cmd>("-> MPEG set border color");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
-void CDBlock::CmdMpegSetFade() {}
+void CDBlock::CmdMpegSetFade() {
+    devlog::info<grp::cmd>("-> MPEG set fade");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
-void CDBlock::CmdMpegSetVideoEffects() {}
+void CDBlock::CmdMpegSetVideoEffects() {
+    devlog::info<grp::cmd>("-> MPEG set video effects");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
-void CDBlock::CmdMpegSetLSI() {}
+void CDBlock::CmdMpegSetLSI() {
+    devlog::info<grp::cmd>("-> MPEG set LSI");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
 void CDBlock::CmdAuthenticateDevice() {
     devlog::trace<grp::cmd>("-> Authenticate device");
@@ -3482,7 +3607,14 @@ void CDBlock::CmdIsDeviceAuthenticated() {
     SetInterrupt(kHIRQ_CMOK);
 }
 
-void CDBlock::CmdGetMpegROM() {}
+void CDBlock::CmdGetMpegROM() {
+    devlog::trace<grp::cmd>("-> Get MPEG ROM");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK);
+}
 
 // -----------------------------------------------------------------------------
 // Probe implementation
