@@ -152,11 +152,9 @@ Saturn::Saturn()
     ConfigureAccessCycles(false);
 
     // Wire Movie Card video overlay into the software VDP renderer.
-    if (configuration.cdblock.movieCardEnabled) {
-        CDBlock.SetMovieCardPresent(true);
-        if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
-            swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
-        }
+    CDBlock.SetMovieCardPresent(true);
+    if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+        swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
     }
 
     m_enableDebugTracing = false;
@@ -172,9 +170,10 @@ Saturn::Saturn()
         [&](core::config::sys::VideoStandard videoStandard) { UpdateVideoStandard(videoStandard); });
     configuration.cdblock.useLLE.Observe([&](bool enabled) { SetCDBlockLLE(enabled); });
     configuration.cdblock.movieCardEnabled.Observe([&](bool enabled) {
-        CDBlock.SetMovieCardPresent(enabled);
+        // Unconditionally keep the movie card present and wired
+        CDBlock.SetMovieCardPresent(true);
         if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
-            swRenderer->SetMPEGCard(enabled ? &CDBlock.GetMPEGCard() : nullptr);
+            swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
         }
     });
 
@@ -541,9 +540,7 @@ void Saturn::RunFrameImpl() {
 
     // Decode the next MPEG video frame at the end of each emulated frame.
     // The decoded frame will be displayed by the VDP overlay on the next frame.
-    if (configuration.cdblock.movieCardEnabled) {
-        CDBlock.GetMPEGCard().DecodeNextFrame();
-    }
+    CDBlock.GetMPEGCard().DecodeNextFrame();
 }
 
 template <bool debug, bool enableSH2Cache, bool cdblockLLE>
