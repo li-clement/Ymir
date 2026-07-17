@@ -1,7 +1,5 @@
 #include <ymir/hw/mpeg/mpeg_card.hpp>
 
-#include <fmt/format.h>
-
 #include <cassert>
 #include <utility>
 
@@ -70,17 +68,12 @@ bool MPEGCard::DecodeNextFrame() {
     // Kronos), but we still need to decode video frames for the overlay.
     auto frame = m_decoder.DecodeFrame();
     if (!frame.has_value()) {
-        static int no_frame_count = 0;
-        if (no_frame_count++ % 60 == 0) {
-            fmt::print(stderr, "MPEGCard: DecodeFrame returned no frame. EOS={}\n", m_endOfStream);
-        }
         if (m_endOfStream) {
             m_status = MPEGCardStatus::Ended;
             m_interruptFlags |= kMPEGCardInterruptStreamEnded;
         }
         return false;
     }
-    fmt::print(stderr, "MPEGCard: DecodeFrame successful! {}x{}\n", frame->width, frame->height);
 
     m_currentFrame = std::move(frame);
     m_interruptFlags |= kMPEGCardInterruptFrameDecoded;
@@ -88,10 +81,9 @@ bool MPEGCard::DecodeNextFrame() {
 }
 
 bool MPEGCard::DecodeNextAudioFrame() {
-    if (m_status != MPEGCardStatus::Playing) {
-        return false;
-    }
-
+    // Decode audio regardless of card status, matching DecodeNextFrame behavior.
+    // The card status is kept at Stopped for game compatibility (matching
+    // Kronos), but we still need to decode audio for mixing.
     auto audio = m_decoder.DecodeAudio();
     if (!audio.has_value()) {
         return false;
@@ -148,7 +140,8 @@ const DecodedAudioFrame &MPEGCard::GetCurrentAudio() const {
 }
 
 bool MPEGCard::GetNextAudioSample(sint16 &left, sint16 &right) {
-    if (m_status != MPEGCardStatus::Playing || !m_decoder.HasAudio()) {
+    // Return audio samples regardless of card status, matching video decode behavior.
+    if (!m_decoder.HasAudio()) {
         return false;
     }
 

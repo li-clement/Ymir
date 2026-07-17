@@ -1051,7 +1051,7 @@ void App::RunEmulator() {
          [](sint16 left, sint16 right, void *ctx) {
              auto *c = static_cast<SharedContext *>(ctx);
              // Mix Movie Card MPEG audio (bypasses SCSP on real hardware)
-             if (c->saturn.instance->configuration.cdblock.movieCardEnabled) {
+             {
                  auto &mpeg = c->saturn.instance->CDBlock.GetMPEGCard();
                  sint16 mpegL, mpegR;
                  if (mpeg.GetNextAudioSample(mpegL, mpegR)) {

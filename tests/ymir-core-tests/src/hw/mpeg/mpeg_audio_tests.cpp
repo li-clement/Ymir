@@ -42,18 +42,21 @@ TEST_CASE("MPEGCard decodes both video and audio frames from stream with audio",
     CHECK_FALSE(card.HasCurrentAudio());
 }
 
-TEST_CASE("MPEGCard does not decode audio while stopped", "[mpeg][movie-card][audio]") {
+TEST_CASE("MPEGCard decodes audio regardless of card status (Stopped for game compat)", "[mpeg][movie-card][audio]") {
     mpeg::MPEGCard card;
 
     card.Initialize();
     card.AppendStreamData(kTinyMpegProgramStream);
     card.SignalEndOfStream();
 
-    // Not started -> should not decode
+    // Card status is Ended after SignalEndOfStream; audio decode happens
+    // regardless of status for game compatibility (card stays Stopped/Ended
+    // to bypass MPEG polling loops, but audio still decodes for mixing).
+    // Video-only fixture has no audio, so decode should fail gracefully.
     CHECK_FALSE(card.DecodeNextAudioFrame());
     CHECK_FALSE(card.HasCurrentAudio());
 
-    CHECK(card.GetStatus() == mpeg::MPEGCardStatus::Stopped);
+    CHECK(card.GetStatus() == mpeg::MPEGCardStatus::Ended);
 }
 
 TEST_CASE("MPEGCard audio frame has correct sample count", "[mpeg][movie-card][audio]") {
@@ -62,16 +65,17 @@ TEST_CASE("MPEGCard audio frame has correct sample count", "[mpeg][movie-card][a
     CHECK(mpeg::DecodedAudioFrame{}.samples.size() == 1152 * 2);
 }
 
-TEST_CASE("MPEGCard GetNextAudioSample returns false when stopped", "[mpeg][movie-card][audio]") {
+TEST_CASE("MPEGCard GetNextAudioSample returns samples regardless of card status", "[mpeg][movie-card][audio]") {
     mpeg::MPEGCard card;
 
     card.Initialize();
     card.AppendStreamData(kTinyMpegProgramStreamWithAudio);
     card.SignalEndOfStream();
 
-    // Not started -> should not produce audio
+    // Audio decode happens regardless of card status (Stopped/Ended) for
+    // game compatibility. The fixture has audio, so samples should be returned.
     sint16 left, right;
-    CHECK_FALSE(card.GetNextAudioSample(left, right));
+    CHECK(card.GetNextAudioSample(left, right));
 }
 
 TEST_CASE("MPEGCard GetNextAudioSample returns false on video-only stream", "[mpeg][movie-card][audio]") {

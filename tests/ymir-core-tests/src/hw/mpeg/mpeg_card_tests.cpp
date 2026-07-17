@@ -35,20 +35,20 @@ TEST_CASE("MPEG movie card accepts streamed sector payloads and exposes decoded 
     CHECK(card.PeekInterruptFlags() == 0);
 }
 
-TEST_CASE("MPEG movie card does not decode while stopped and reset clears state", "[mpeg][movie-card]") {
+TEST_CASE("MPEG movie card decodes frames regardless of status and reset clears state", "[mpeg][movie-card]") {
     mpeg::MPEGCard card;
 
     card.Initialize();
     card.AppendStreamData(kTinyMpegProgramStream);
     card.SignalEndOfStream();
 
-    CHECK_FALSE(card.DecodeNextFrame());
-    CHECK_FALSE(card.HasCurrentFrame());
-    CHECK(card.GetStatus() == mpeg::MPEGCardStatus::Stopped);
-
-    card.StartPlayback();
+    // Card status is Ended after SignalEndOfStream; decode happens regardless
+    // of status for game compatibility (card stays Stopped/Ended to bypass
+    // MPEG polling loops, but video/audio still decode for overlay/mixing).
     REQUIRE(card.DecodeNextFrame());
-    CHECK(card.HasCurrentFrame());
+    REQUIRE(card.HasCurrentFrame());
+    CHECK(card.GetStatus() == mpeg::MPEGCardStatus::Ended);
+
     CHECK(card.PeekInterruptFlags() != 0);
 
     card.Reset();

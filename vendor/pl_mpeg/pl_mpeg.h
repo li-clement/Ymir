@@ -1925,6 +1925,19 @@ int plm_demux_probe(plm_demux_t *self, size_t probesize) {
 		}
 	}
 
+	// If we found any streams via probing, mark headers as found.
+	// This is necessary for MPEG files where the system header (0x000001BB)
+	// is located far into the stream (e.g. 700KB+ for Lunar Silver Star Story).
+	// plm_demux_has_headers() tries to parse the system header from the current
+	// read position, which may have already moved past it. Since probe already
+	// correctly set num_audio_streams/num_video_streams by scanning packets,
+	// we can safely set has_headers here.
+	if (self->num_video_streams || self->num_audio_streams) {
+		self->has_pack_header = TRUE;
+		self->has_system_header = TRUE;
+		self->has_headers = TRUE;
+	}
+
 	plm_demux_buffer_seek(self, previous_pos);
 	return (self->num_video_streams || self->num_audio_streams);
 }

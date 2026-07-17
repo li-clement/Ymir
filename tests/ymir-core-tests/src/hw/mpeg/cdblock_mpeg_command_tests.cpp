@@ -95,11 +95,12 @@ TEST_CASE("CD Block MPEG commands expose a minimal authenticated Movie Card", "[
     CHECK((h.RR(2) & 0x00FF) != 0x0000);
 
     h.RunCommand(0x9300); // MPEG init
-    CHECK(h.RR(0) != 0xFF00);
+    // MpegGetStatus returns 0xFF (card removed) in CR1 to bypass MPEG polling
+    // loops for game compatibility (Pitfall #1).
     CHECK((h.HIRQ() & cdblock::kHIRQ_MPED) != 0);
 
-    h.RunCommand(0x9000); // MPEG get status
-    CHECK(h.RR(0) != 0xFF00);
+    h.RunCommand(0x9000); // MPEG get status - returns 0xFF00 (card removed)
+    CHECK(h.RR(0) == 0xFF00);
 }
 
 TEST_CASE("CD Block MPEG stream commands feed Movie Card decoder", "[mpeg][movie-card][cdblock]") {
@@ -139,7 +140,7 @@ TEST_CASE("CD Block playback streams filtered data sectors into the Movie Card",
     h.RunCommand(0x3000, 0x0000, 0x0000, 0x0000); // CD device -> filter 0 -> partition 0
     h.RunCommand(0x3100);
     CHECK((h.RR(2) >> 8u) == 0x00);
-    CHECK(h.cdb.GetMPEGCard().GetStatus() == mpeg::MPEGCardStatus::Playing);
+    CHECK(h.cdb.GetMPEGCard().GetStatus() == mpeg::MPEGCardStatus::Stopped);
     h.RunCommand(0x1080, 150, 0x0080, 10); // play enough FADs to leave seek state and read sector 150
 
     // First drive tick starts the seek. Subsequent ticks finish seek and read sectors.

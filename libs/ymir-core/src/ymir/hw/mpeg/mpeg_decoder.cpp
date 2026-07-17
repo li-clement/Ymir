@@ -13,6 +13,7 @@ namespace ymir::mpeg {
 struct MPEGVideoDecoder::Impl {
     plm_buffer_t *buffer = nullptr;
     plm_t *plm = nullptr;
+    int probeCount = 0;
 
     Impl() {
         Reset();
@@ -39,6 +40,7 @@ struct MPEGVideoDecoder::Impl {
         plm = plm_create_with_buffer(buffer, TRUE);
         plm_set_video_enabled(plm, TRUE);
         plm_set_audio_enabled(plm, TRUE);
+        probeCount = 0;
     }
 };
 
@@ -72,6 +74,17 @@ void MPEGVideoDecoder::Append(std::span<const uint8> data) {
         return;
     }
     plm_buffer_write(m_impl->buffer, const_cast<uint8 *>(data.data()), data.size());
+
+    // Probe for audio streams if not yet discovered.
+    // Some MPEG files have a system header that declares 0 audio streams, or
+    // the system header is 700KB+ into the stream. In both cases,
+    // plm_demux_has_headers() sets num_audio_streams=0 and the audio decoder
+    // is never created. plm_probe() scans the buffer for actual audio PES
+    // packets (0xC0-0xDF), which is more reliable than the system header.
+    if (m_impl->probeCount < 2000 && plm_get_num_audio_streams(m_impl->plm) == 0) {
+        plm_probe(m_impl->plm, 1024 * 1024);
+        m_impl->probeCount++;
+    }
 }
 
 void MPEGVideoDecoder::SignalEndOfStream() {
