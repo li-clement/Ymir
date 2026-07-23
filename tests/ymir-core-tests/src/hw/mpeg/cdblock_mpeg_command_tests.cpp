@@ -16,40 +16,7 @@ using namespace ymir::test::mpeg_fixtures;
 
 namespace {
 
-struct CDBlockHarness {
-    core::Scheduler scheduler;
-    media::Disc disc;
-    media::fs::Filesystem fs;
-    core::Configuration::CDBlock config;
-    cdblock::CDBlock cdb{scheduler, disc, fs, config};
-    sys::SH2Bus bus;
-    uint32 extInterruptCount = 0;
-
-    CDBlockHarness() {
-        cdb.MapCallbacks(
-            {this, [](void *ctx) { static_cast<CDBlockHarness *>(ctx)->extInterruptCount++; }},
-            {this, [](std::span<uint8, 2352>, void *) -> uint32 { return 0; }});
-        cdb.MapMemory(bus);
-    }
-
-    void RunCommand(uint16 cr1, uint16 cr2 = 0, uint16 cr3 = 0, uint16 cr4 = 0) {
-        bus.Write<uint16>(0x5890018, cr1);
-        bus.Write<uint16>(0x589001C, cr2);
-        bus.Write<uint16>(0x5890020, cr3);
-        bus.Write<uint16>(0x5890024, cr4);
-        scheduler.Advance(50);
-    }
-
-    uint16 RR(uint32 index) const {
-        return bus.Peek<uint16>(0x5890028 + index * sizeof(uint32));
-    }
-
-    uint16 HIRQ() const {
-        return bus.Peek<uint16>(0x5890008);
-    }
-};
-
-
+// Build a single-track mode-1 disc image padded to a multiple of 2048 bytes.
 std::vector<uint8> BuildMode1DiscImage(std::span<const uint8> payload) {
     constexpr uint32 kSectorSize = 2048;
     const uint32 sectorCount = (payload.size() + kSectorSize - 1) / kSectorSize;
@@ -79,6 +46,54 @@ void ConfigureSingleDataTrack(media::Disc &disc, std::vector<uint8> image, uint3
     disc.sessions.clear();
     disc.sessions.push_back(std::move(session));
 }
+
+struct CDBlockHarness {
+    core::Scheduler scheduler;
+    // CDInterface wraps a Disc via ImageCDDevice; tests construct a disc,
+    // load it into m_cdInterface via LoadMode1DiscImage, and CDBlock reads
+    // through that interface. TV tests that don't need a disc simply skip
+    // the load call.
+    media::CDInterface cdif;
+    media::fs::Filesystem fs;
+    core::Configuration::CDBlock config;
+    cdblock::CDBlock cdb{scheduler, cdif, fs, config};
+    sys::SH2Bus bus;
+    uint32 extInterruptCount = 0;
+
+    CDBlockHarness() {
+        cdb.MapCallbacks(
+            {this, [](void *ctx) { static_cast<CDBlockHarness *>(ctx)->extInterruptCount++; }},
+            {this, [](std::span<uint8, 2352>, void *) -> uint32 { return 0; }});
+        cdb.MapMemory(bus);
+    }
+
+    // Build a mode-1 disc image from the payload, attach it to the CD
+    // interface so the CD block can read sectors from it. sectorCount is
+    // rounded up to give the CD block the full FAD range to drive seeking.
+    void LoadMode1DiscImage(std::span<const uint8> payload) {
+        auto image = BuildMode1DiscImage(payload);
+        const uint32 sectorCount = static_cast<uint32>(image.size() / 2048);
+        media::Disc disc;
+        ConfigureSingleDataTrack(disc, std::move(image), sectorCount);
+        cdif.LoadDisc(std::move(disc));
+    }
+
+    void RunCommand(uint16 cr1, uint16 cr2 = 0, uint16 cr3 = 0, uint16 cr4 = 0) {
+        bus.Write<uint16>(0x5890018, cr1);
+        bus.Write<uint16>(0x589001C, cr2);
+        bus.Write<uint16>(0x5890020, cr3);
+        bus.Write<uint16>(0x5890024, cr4);
+        scheduler.Advance(50);
+    }
+
+    uint16 RR(uint32 index) const {
+        return bus.Peek<uint16>(0x5890028 + index * sizeof(uint32));
+    }
+
+    uint16 HIRQ() const {
+        return bus.Peek<uint16>(0x5890008);
+    }
+};
 
 } // namespace
 
@@ -128,8 +143,7 @@ TEST_CASE("CD Block MPEG stream commands feed Movie Card decoder", "[mpeg][movie
 
 TEST_CASE("CD Block playback streams filtered data sectors into the Movie Card", "[mpeg][movie-card][cdblock]") {
     CDBlockHarness h;
-    auto image = BuildMode1DiscImage(kTinyMpegProgramStream);
-    ConfigureSingleDataTrack(h.disc, std::move(image), 1);
+    h.LoadMode1DiscImage(kTinyMpegProgramStream);
 
     h.RunCommand(0xE000, 0x0001);
     h.RunCommand(0x9300);
