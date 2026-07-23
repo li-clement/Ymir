@@ -14,6 +14,7 @@
 #include <ymir/debug/cdblock_tracer_base.hpp>
 
 #include <ymir/hw/cdblock/cdblock_internal_callbacks.hpp>
+#include <ymir/hw/mpeg/mpeg_card.hpp>
 #include <ymir/sys/system_internal_callbacks.hpp>
 
 #include <ymir/savestate/savestate_cdblock.hpp>
@@ -51,6 +52,25 @@ public:
     void OpenTray();
     void CloseTray();
     [[nodiscard]] bool IsTrayOpen() const;
+
+    mpeg::MPEGCard &GetMPEGCard() {
+        return m_mpegCard;
+    }
+
+    const mpeg::MPEGCard &GetMPEGCard() const {
+        return m_mpegCard;
+    }
+
+    void SetMovieCardPresent(bool present) {
+        m_movieCardPresent = present;
+        // On a real Hi-Saturn, the CD Block starts with the MPEG card already
+        // authenticated. Simulate this by setting mpegAuthStatus to 2 when the
+        // card is present, so the game can probe the card without first calling
+        // MpegInit.
+        if (present) {
+            m_mpegAuthStatus = 2;
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Save states
@@ -150,12 +170,48 @@ private:
     //   2: MPEG card present
     uint8 m_mpegAuthStatus;
 
+    mpeg::MPEGCard m_mpegCard;
+    uint16 m_mpegInterruptMask;
+    uint16 m_mpegConnection;
+    uint16 m_mpegStream;
+    uint16 m_mpegDisplay;
+    uint16 m_mpegMode;
+    uint16 m_mpegDecodingMethod;
+
+    // MPEG connection state (matching Kronos mpegcon_struct)
+    uint8 m_mpegAudCon = 0;
+    uint8 m_mpegAudLay = 0;
+    uint8 m_mpegAudBufNum = 0xFF;
+    uint8 m_mpegVidCon = 0;
+    uint8 m_mpegVidLay = 0;
+    uint8 m_mpegVidBufNum = 0xFF;
+
+    bool m_movieCardPresent = true; // MPEG card is always present in HLE
+
+    // MPEG-1 Program Stream system-layer parser state (erings mpegPackScan
+    // equivalent). Tracks position across FeedMPEGStream calls so a system-
+    // end code (00 00 01 B9) is only matched at the system layer, not in
+    // packet payloads. Once matched at the system layer AND a connection-
+    // mode bit 0x02 (switch-on-system-end) is set on either audio or video,
+    // we stop feeding pl_mpeg, append a synthetic picture bounding code
+    // (00 00 01 00) and signal end-of-stream so pl_mpeg flushes its final
+    // reference frame. Reset on SetupGenericPlayback (new playback range),
+    // CmdMpegInit, and CmdMpegSetConnection (both partitions disconnected).
+    struct PackScan {
+        int skip = 0;     // bytes remaining to skip (pack header body or packet payload)
+        int code = 0;     // 0..3 = leading zero bytes of next start code
+        int length = 0;   // packet length being assembled
+        int lenN = 0;     // 0=idle, 1=awaiting high byte, 2=awaiting low byte
+    } m_packScan;
+    bool m_mpegSystemEndReached = false;
+
     bool SetupGenericPlayback(uint32 startParam, uint32 endParam, uint16 repeatParam);
     bool SetupFilePlayback(uint32 fileID, uint32 offset, uint8 filterNumber);
     bool SetupScan(uint8 direction);
 
     void ProcessDriveState();
     void ProcessDriveStatePlay();
+    void FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer);
     void CheckPlayEnd();
 
     // -------------------------------------------------------------------------
@@ -416,17 +472,18 @@ private:
     void CmdMpegSetDecodingMethod(); // 0x96
 
     // MPEG stream
-    void CmdMpegSetConnection(); // 0x9A
-    void CmdMpegGetConnection(); // 0x9B
-    void CmdMpegSetStream();     // 0x9D
-    void CmdMpegGetStream();     // 0x9E
-
+    void CmdMpegSetConnection();     // 0x9A
+    void CmdMpegGetConnection();     // 0x9B
+    void CmdMpegChangeConnection();  // 0x9C
+    void CmdMpegSetStream();         // 0x9D
+    void CmdMpegGetStream();         // 0x9E
     // MPEG display screen
     void CmdMpegDisplay();         // 0xA0
     void CmdMpegSetWindow();       // 0xA1
     void CmdMpegSetBorderColor();  // 0xA2
     void CmdMpegSetFade();         // 0xA3
     void CmdMpegSetVideoEffects(); // 0xA4
+    void CmdMpegGetLsi();          // 0xAE
     void CmdMpegSetLSI();          // 0xAF
 
     void CmdAuthenticateDevice();    // 0xE0

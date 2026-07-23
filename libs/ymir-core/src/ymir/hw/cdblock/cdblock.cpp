@@ -125,7 +125,23 @@ void CDBlock::Reset(bool hard) {
     m_readSpeed = 1;
 
     m_discAuthStatus = 0;
-    m_mpegAuthStatus = 0;
+    // 模拟 Hi-Saturn 行为：Movie Card 存在时保留认证状态
+    m_mpegAuthStatus = m_movieCardPresent ? 2 : 0;
+    m_mpegCard.Reset();
+    m_packScan = {};
+    m_mpegSystemEndReached = false;
+    m_mpegInterruptMask = 0;
+    m_mpegConnection = 0xFFFF;
+    m_mpegStream = 0;
+    m_mpegDisplay = 0;
+    m_mpegMode = 0;
+    m_mpegDecodingMethod = 0;
+    m_mpegAudCon = 0;
+    m_mpegAudLay = 0;
+    m_mpegAudBufNum = 0xFF;
+    m_mpegVidCon = 0;
+    m_mpegVidLay = 0;
+    m_mpegVidBufNum = 0xFF;
 
     if (hard) {
         m_HIRQ = 0x0BE1;
@@ -741,6 +757,11 @@ bool CDBlock::SetupGenericPlayback(uint32 startParam, uint32 endParam, uint16 re
     m_playMaxRepeat = m_playRepeatParam & 0xF;
     m_playFile = false;
     m_playEndPending = false;
+    // NOTE: do not reset m_packScan / m_mpegSystemEndReached here. The FMV
+    // MPEG-PS stream is one contiguous byte sequence across multiple CmdPlayDisc
+    // chunks; resetting here would drop the parser position mid-stream and
+    // miss the program-end code at the chunk boundary. These reset only on
+    // Reset() (boot), CmdMpegInit ($93), and CmdMpegSetConnection disconnect.
 
     const media::TOC &toc = m_cdif.GetTOC();
 
@@ -1101,9 +1122,18 @@ void CDBlock::ProcessDriveStatePlay() {
                                 devlog::trace<grp::play>("Passed filter; output disconnected - discarded");
                             } else {
                                 assert(filter.passOutput < m_filters.size());
-                                devlog::trace<grp::play>("Passed filter; sent to buffer partition {}",
-                                                         filter.passOutput);
-                                m_partitionManager.InsertHead(filter.passOutput, buffer);
+                                // If this partition is connected to the MPEG decoder,
+                                // feed data directly to the decoder and skip partition
+                                // buffer insertion to avoid buffer exhaustion.
+                                if (m_mpegAuthStatus == 2 &&
+                                    (filter.passOutput == m_mpegAudBufNum ||
+                                     filter.passOutput == m_mpegVidBufNum)) {
+                                    FeedMPEGStream(filter.passOutput, buffer);
+                                } else {
+                                    devlog::trace<grp::play>("Passed filter; sent to buffer partition {}",
+                                                             filter.passOutput);
+                                    m_partitionManager.InsertHead(filter.passOutput, buffer);
+                                }
                                 m_lastCDWritePartition = filter.passOutput;
                                 SetInterrupt(kHIRQ_CSCT);
                             }
@@ -1181,7 +1211,33 @@ void CDBlock::ProcessDriveStatePlay() {
     if (endReached) {
         // 0x0 to 0xE = 0 to 14 repeats
         // 0xF = infinite repeats
-        if (m_playMaxRepeat == 0xF || m_status.repeatCount < m_playMaxRepeat) {
+        //
+        // While MPEG playback is active, never loop the FAD range. The game
+        // issues many small PlayDisc calls per FMV (Lunar's FMV driver reads
+        // ~150 KB chunks) and relies on this branch to stop the drive at the
+        // end of each chunk so it can issue the next one. If we looped, pl_mpeg
+        // would never see the next chunk's first sector as a continuation and
+        // the FMV would stutter; if we instead fired SignalEndOfStream here the
+        // card would flip to Ended mid-FMV, the game's $90 poll would see
+        // RR3=0x0002 (videoEnded), and it would exit the MPEG poll loop and
+        // jump to Track 1 while half the FMV is still undecoded.
+        const bool mpegActive =
+            m_mpegAuthStatus == 2 && m_mpegCard.GetStatus() == mpeg::MPEGCardStatus::Playing &&
+            (m_mpegAudBufNum != 0xFF || m_mpegVidBufNum != 0xFF);
+        if (mpegActive) {
+            devlog::debug<grp::play>("MPEG active: FAD range complete, awaiting next chunk (no loop, no EOS)");
+            // Stop this range without looping and without ending the MPEG
+            // stream. The drive goes idle; pl_mpeg continues draining its
+            // internal buffer in VBlank. The game's next PlayDisc (still
+            // pointing at MPEG data on Track 2) will resume feeding via
+            // AppendStreamData, which reopens a fresh pl_mpeg pipeline if
+            // needed. If the game instead issues a non-MPEG PlayDisc, the
+            // pipeline reset is exactly what we want.
+            m_playEndPending = true;
+            m_playMaxRepeat = 0;
+            m_status.repeatCount = 0xF;
+            m_status.statusCode = kStatusCodePause;
+        } else if (m_playMaxRepeat == 0xF || m_status.repeatCount < m_playMaxRepeat) {
             if (m_playMaxRepeat == 0xF) {
                 devlog::debug<grp::play>("Playback repeat (infinite)");
             } else {
@@ -1197,6 +1253,189 @@ void CDBlock::ProcessDriveStatePlay() {
     }
 }
 
+void CDBlock::FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer) {
+    if (m_mpegAuthStatus != 2) {
+        return;
+    }
+    // Check if this partition is connected to the MPEG decoder.
+    // audbufnum and vidbufnum from MpegSetConnection specify which partitions
+    // receive audio and video data respectively.
+    if (partitionIndex != m_mpegAudBufNum && partitionIndex != m_mpegVidBufNum) {
+        return;
+    }
+
+    uint32 offset = 0;
+    uint32 size = buffer.size;
+
+    const bool mode1 = buffer.data[0xF] == 0x01;
+    const bool mode2 = buffer.data[0xF] == 0x02;
+
+    if (mode2) {
+        offset = 24u; // Skip 16-byte Header + 8-byte Subheader
+        if ((buffer.subheader.submode & 0x20) != 0) {
+            size = 2324u; // Form 2 payload size
+        } else {
+            size = 2048u; // Form 1 payload size
+        }
+    } else if (mode1) {
+        offset = 16u; // Skip 16-byte Header
+        size = 2048u; // Mode 1 payload size
+    }
+
+    size = std::min<size_t>(size, buffer.data.size() - offset);
+    if (size == 0) {
+        return;
+    }
+
+    // Scan for MPEG-1 Program Stream pack start code (0x00 0x00 0x01 0xBA).
+    // The start code may not be at the beginning of the first sector because
+    // CD-XA sectors can contain padding. Scan the entire payload.
+    bool hasMpegStartCode = false;
+    for (uint32 i = 0; i + 3 < size; i++) {
+        if (buffer.data[offset + i] == 0x00 &&
+            buffer.data[offset + i + 1] == 0x00 &&
+            buffer.data[offset + i + 2] == 0x01 &&
+            buffer.data[offset + i + 3] == 0xBA) {
+            hasMpegStartCode = true;
+            // Adjust offset to start from the pack start code
+            offset += i;
+            size -= i;
+            break;
+        }
+    }
+    if (!hasMpegStartCode) {
+        // Not an MPEG sector - skip without feeding to decoder
+        static int skipCount = 0;
+        if (skipCount++ % 100 == 0) {
+            devlog::debug<grp::base>("FeedMPEGStream: skipped {} non-MPEG sectors (partition={}, mode={})",
+                skipCount, partitionIndex, mode2 ? 2 : (mode1 ? 1 : 0));
+        }
+        return;
+    }
+
+    // Hot path: one sector can arrive many times per frame during FMV. Keep at
+    // trace so default debug builds do not flood stdout and halve speed.
+    devlog::trace<grp::base>("FeedMPEGStream: feeding {} bytes to MPEG decoder (partition={}, offset={})", size, partitionIndex, offset);
+
+    // Parse the system layer of the freshly-fed payload so we can detect the
+    // MPEG-PS program-end code (00 00 01 B9) and synthesise the hardware
+    // "switch-on-system-end" behaviour that erings' reference documents:
+    //
+    //   - Stop feeding data to pl_mpeg at the system-end marker so the
+    //     decoder's last picture decodes once (with a synthetic bounding
+    //     picture start code, 00 00 01 00, appended just after the marker).
+    //   - Call plm_buffer_signal_end on pl_mpeg's buffer so the demuxer
+    //     finishes and plm_demux_has_ended() flips true.
+    //
+    // The connection-mode bit 0x02 (switch on system-end) gates this; Lunar
+    // sets vidcon=0x26 (0x02 set), audcon=0x06 (0x02 clear). When neither
+    // layer's connection has 0x02 set we are not required to end on 0xB9 and
+    // the data flows through unchanged.
+    //
+    // packScan mimics erings mpegPackScan.feed (see
+    // erings-main/core/cdblock_mpeg_decode.go). It tracks position across
+    // calls so a 00 00 01 B9 inside a packet payload (where audio data is
+    // NOT start-code-free) is never mistaken for the system-layer marker.
+    if (!m_mpegSystemEndReached) {
+        const uint8 *data = buffer.data.data() + offset;
+        bool ended = false;
+        for (uint32 i = 0; i < size && !ended; i++) {
+            const uint8 b = data[i];
+            if (m_packScan.skip > 0) {
+                m_packScan.skip--;
+                continue;
+            }
+            if (m_packScan.lenN > 0) {
+                m_packScan.length = (m_packScan.length << 8) | b;
+                if (m_packScan.lenN == 2) {
+                    m_packScan.skip = m_packScan.length;
+                    m_packScan.length = 0;
+                    m_packScan.lenN = 0;
+                } else {
+                    m_packScan.lenN++;
+                }
+                continue;
+            }
+            switch (m_packScan.code) {
+            case 0: case 1:
+                if (b == 0) m_packScan.code++;
+                else m_packScan.code = 0;
+                break;
+            case 2:
+                switch (b) {
+                case 0:
+                    // third zero byte still prefixes a start code
+                    break;
+                case 1:
+                    m_packScan.code = 3;
+                    break;
+                default:
+                    m_packScan.code = 0;
+                    break;
+                }
+                break;
+            default: // 00 00 01 matched; b is the start code
+                m_packScan.code = 0;
+                switch (b) {
+                case 0xB9:
+                    ended = true;
+                    break;
+                case 0xBA:
+                    // pack header: 8 bytes follow
+                    m_packScan.skip = 8;
+                    break;
+                case 0xBB:
+                default:
+                    if (b >= 0xBB) {
+                        // system header or packet: 16-bit length follows
+                        m_packScan.lenN = 1;
+                    }
+                    // any other code (private/video/audio) is not system layer
+                    // -- continue scanning without consuming
+                    break;
+                }
+                break;
+            }
+        }
+
+        if (ended && ((m_mpegAudCon & 0x02) != 0 || (m_mpegVidCon & 0x02) != 0)) {
+            devlog::debug<grp::base>(
+                "FeedMPEGStream: MPEG-PS program-end 0xB9 detected at system layer "
+                "(partition={}, offset={}, size={}, audcon={:02X}, vidcon={:02X})",
+                partitionIndex, offset, size, m_mpegAudCon, m_mpegVidCon);
+            m_mpegSystemEndReached = true;
+        }
+
+        if (m_mpegSystemEndReached) {
+            // Truncate the payload at the program-end marker so pl_mpeg does
+            // not see any data beyond it, then append a 4-byte synthetic
+            // picture start code (00 00 01 00). erings notes that the decoder
+            // only releases a picture once it sees the start code of the
+            // NEXT picture; without a bounding code the final picture would
+            // never decode.
+            //
+            // Append the bounded data first, then request end-of-stream
+            // last -- otherwise AppendStreamData's soft-reopen path (taken
+            // when m_status==Ended or m_endOfStream is true) would reset
+            // pl_mpeg's pipeline and undo our plm_buffer_signal_end.
+            m_mpegCard.AppendStreamData(std::span<const uint8>{buffer.data}.subspan(offset, size));
+            m_mpegCard.AppendStreamData(std::span<const uint8>{
+                reinterpret_cast<const uint8 *>("\x00\x00\x01\x00"), 4});
+            m_mpegCard.RequestEndOfStream();
+            // Reset scan so subsequent MPEG streams (next FMV) start fresh.
+            m_packScan = {};
+            return;
+        }
+    } else {
+        // Already past the system-end marker (a previous FeedMPEGStream call
+        // triggered the EOF). Skip feeding further sectors so AppendStreamData
+        // cannot reopen pl_mpeg and undo our plm_buffer_signal_end.
+        return;
+    }
+
+    m_mpegCard.AppendStreamData(std::span<const uint8>{buffer.data}.subspan(offset, size));
+}
+
 void CDBlock::CheckPlayEnd() {
     if (m_playEndPending) {
         m_playEndPending = false;
@@ -1204,7 +1443,49 @@ void CDBlock::CheckPlayEnd() {
         m_status.frameAddress = m_playEndPos + 1;
         m_targetDriveCycles = kDriveCyclesNotPlaying;
 
+        const bool mpegActive =
+            m_mpegAuthStatus == 2 && m_mpegCard.GetStatus() == mpeg::MPEGCardStatus::Playing &&
+            (m_mpegAudBufNum != 0xFF || m_mpegVidBufNum != 0xFF);
+
+        if (mpegActive) {
+            // MPEG chunk is finished; the drive is now idle. We need to
+            // signal "MPEG chunk done" to the game so its FMV driver can
+            // issue the next PlayDisc chunk.
+            //
+            // We CANNOT just call m_mpegCard.SignalEndOfStream() because that
+            // flips the card to Ended and fires kHIRQ_MPED, which $90 also
+            // reports as RR3=0x0002 (videoEnded). The game then exits its
+            // MPEG poll loop and jumps to Track 1 mid-FMV, cutting the
+            // playback short (the original c2afe098 bug).
+            //
+            // We ALSO cannot leave the card in Playing and just fire
+            // kHIRQ_PEND, because the game treats the MPEG interrupt bits
+            // (MPCM/MPED/MPST) as "feed more data" — without them, the
+            // game re-issues the same FAD range over and over (loop).
+            //
+            // The actual fix: fire kHIRQ_MPCM/MPED/MPST here so the game
+            // knows the chunk is done (HIRQ_MPCM = "audio data ready",
+            // HIRQ_MPED = "data fed", HIRQ_MPST = "MPEG status change").
+            // The card stays in Playing so pl_mpeg keeps decoding buffered
+            // frames; the game's $90 poll keeps returning Playing until
+            // the game itself decides the FMV is over and issues $9A to
+            // disconnect partitions (which calls m_mpegCard.StopPlayback
+            // and flips the card to Ended at that point).
+            //
+            // The HIRQ_MPCM/MPED/MPST here is the "MPEG data has just
+            // been fed, ready for next chunk" signal — not the
+            // "MPEG stream truly ended" signal. The latter is only fired
+            // when the game issues $9A and the card transitions to Ended.
+        }
+
+        // Trigger HIRQ_PEND for CD playback end plus the MPEG interrupt
+        // bits the game needs to know a chunk was just fed. The MPEG bits
+        // are what cause the game's FMV driver to issue the next PlayDisc
+        // chunk; the actual stream-end signal comes from $9A disconnect.
         uint16 hirq = kHIRQ_PEND;
+        if (mpegActive) {
+            hirq |= kHIRQ_MPCM | kHIRQ_MPED | kHIRQ_MPST;
+        }
         if (m_playFile) {
             hirq |= kHIRQ_EFLS | kHIRQ_EHST;
         }
@@ -1729,31 +2010,29 @@ FORCE_INLINE void CDBlock::ProcessCommand() {
     case 0x74: CmdReadFile(); break;
     case 0x75: CmdAbortFile(); break;
 
-    // case 0x90: CmdMpegGetStatus(); break;
-    // case 0x91: CmdMpegGetInterrupt(); break;
-    // case 0x92: CmdMpegSetInterruptMask(); break;
-    case 0x93:
-        CmdMpegInit();
-        break;
-        // case 0x94: CmdMpegSetMode(); break;
-        // case 0x95: CmdMpegPlay(); break;
-        // case 0x96: CmdMpegSetDecodingMethod(); break;
-        // case 0x9A: CmdMpegSetConnection(); break;
-        // case 0x9B: CmdMpegGetConnection(); break;
-        // case 0x9D: CmdMpegSetStream(); break;
-        // case 0x9E: CmdMpegGetStream(); break;
-        // case 0xA0: CmdMpegDisplay(); break;
-        // case 0xA1: CmdMpegSetWindow(); break;
-        // case 0xA2: CmdMpegSetBorderColor(); break;
-        // case 0xA3: CmdMpegSetFade(); break;
-        // case 0xA4: CmdMpegSetVideoEffects(); break;
-        // case 0xAF: CmdMpegSetLSI(); break;
+    case 0x90: CmdMpegGetStatus(); break;
+    case 0x91: CmdMpegGetInterrupt(); break;
+    case 0x92: CmdMpegSetInterruptMask(); break;
+    case 0x93: CmdMpegInit(); break;
+    case 0x94: CmdMpegSetMode(); break;
+    case 0x95: CmdMpegPlay(); break;
+    case 0x96: CmdMpegSetDecodingMethod(); break;
+    case 0x9A: CmdMpegSetConnection(); break;
+    case 0x9B: CmdMpegGetConnection(); break;
+    case 0x9C: CmdMpegChangeConnection(); break;
+    case 0x9D: CmdMpegSetStream(); break;
+    case 0x9E: CmdMpegGetStream(); break;
+
+    case 0xA0: CmdMpegDisplay(); break;
+    case 0xA1: CmdMpegSetWindow(); break;
+    case 0xA2: CmdMpegSetBorderColor(); break;
+    case 0xA3: CmdMpegSetFade(); break;
+    case 0xA4: CmdMpegSetVideoEffects(); break;
+    case 0xAF: CmdMpegSetLSI(); break;
 
     case 0xE0: CmdAuthenticateDevice(); break;
-    case 0xE1:
-        CmdIsDeviceAuthenticated();
-        break;
-        // case 0xE2: CmdGetMpegROM(); break;
+    case 0xE1: CmdIsDeviceAuthenticated(); break;
+    case 0xE2: CmdGetMpegROM(); break;
 
     default:
         devlog::warn<grp::cmd>("Unimplemented command {:02X}", cmd);
@@ -1781,7 +2060,7 @@ void CDBlock::CmdGetStatus() {
 }
 
 void CDBlock::CmdGetHardwareInfo() {
-    devlog::trace<grp::cmd>("-> Get hardware info");
+    devlog::info<grp::cmd>("-> Get hardware info (mpegAuth={}, cardPresent={})", m_mpegAuthStatus, m_movieCardPresent);
 
     // Input structure:
     // 0x01     <blank>
@@ -1795,8 +2074,8 @@ void CDBlock::CmdGetHardwareInfo() {
     // <blank>          MPEG version (0 if unauthenticated)
     // drive version    drive revision
     m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = 0x0002;
-    m_RR[2] = 0x0000;
+    m_RR[1] = m_movieCardPresent ? 0x0202 : 0x0002;
+    m_RR[2] = (m_mpegAuthStatus == 2) ? 0x0001 : 0x0000;
     m_RR[3] = 0x0600;
 
     SetInterrupt(kHIRQ_CMOK);
@@ -1925,7 +2204,8 @@ void CDBlock::CmdInitializeCDSystem() {
         m_playFile = false;
 
         m_discAuthStatus = 0;
-        m_mpegAuthStatus = 0;
+        // 模拟 Hi-Saturn 行为：Movie Card 存在时保留认证状态
+        m_mpegAuthStatus = m_movieCardPresent ? 2 : 0;
 
         m_partitionManager.Reset();
         for (auto &filter : m_filters) {
@@ -2011,6 +2291,21 @@ void CDBlock::CmdPlayDisc() {
     const uint32 endParam = (bit::extract<0, 7>(m_CR[2]) << 16u) | m_CR[3];
 
     devlog::debug<grp::base>("Play parameters: start={:06X} end={:06X} repeat={:X}", startParam, endParam, repeatParam);
+
+    // If the MPEG card has reached its terminal state (Ended) from a
+    // previous FMV and the game issues another PlayDisc, do not silently
+    // Reset() the card here -- the driver is expected to bring the card
+    // back via MpegInit ($93) and MpegSetConnection ($9A). Resetting here
+    // mid-driver would discard the preserved last frame and force a stale
+    // "card removed" status on the next $90 (0xFF), which on Lunar
+    // triggers a CmdPlayDisc replay loop instead of advancing to Track 1.
+    //
+    // The decoder itself is safe to re-feed: AppendStreamData already
+    // transitions Ended -> Playing on new data, and MpegGetStatus will
+    // report Ended until the decoder signals end of the new stream.
+    if (m_mpegCard.GetStatus() == mpeg::MPEGCardStatus::Ended) {
+        devlog::debug<grp::cmd>("PlayDisc after Ended: leaving MPEG card state alone (driver will re-init)");
+    }
 
     // Output structure: standard CD status data
     if (SetupGenericPlayback(startParam, endParam, repeatParam)) {
@@ -3260,63 +3555,451 @@ void CDBlock::CmdAbortFile() {
     SetInterrupt(kHIRQ_CMOK | kHIRQ_EFLS);
 }
 
-void CDBlock::CmdMpegGetStatus() {}
+void CDBlock::CmdMpegGetStatus() {
+    const auto mpegStatus = m_mpegCard.GetStatus();
 
-void CDBlock::CmdMpegGetInterrupt() {}
+    // statusCode semantics:
+    //   0x00 = card present, MPEG subsystem idle (matches the real driver's
+    //          default and erings' cmdMpegStatusReturn which exposes the
+    //          raw CD status byte to the host).
+    //   0xFF = card removed. We only return 0xFF when the card was never
+    //          authenticated (m_mpegAuthStatus != 2). Returning 0xFF for
+    //          Stopped/Ended broke Lunar: it interprets 0xFF as "no card
+    //          present" and deadlocks re-issuing CmdPlayDisc for the same
+    //          Track 2 FAD range, never advancing to Track 1 / title.
+    //   0x09 = MPEG error.
+    const bool mpegReady = (m_mpegAuthStatus == 2);
+    uint8 statusCode = mpegReady ? 0x00 : 0xFF;
+    uint16 rr3 = 0;
+    // MPEG operation-status byte (RR0 low byte, per erings mpegStatusReturn):
+    //   bits 0-2 = video decoder state (1=Stopped, 4=Playing)
+    //   bits 4-6 = audio decoder state (1=Stopped, 4=Playing)
+    // The bit pattern 0x11 (vid=Stopped, aud=Stopped) is the "decoder
+    // reports idle" signal Lunar watches to leave its MPEG poll loop
+    // and proceed to Track 1 / title.
+    uint8 opStatus = 0x11;  // assume both decoders stopped
+    if (mpegReady) {
+        if (mpegStatus == mpeg::MPEGCardStatus::Playing &&
+            (m_mpegAudBufNum != 0xFF || m_mpegVidBufNum != 0xFF)) {
+            opStatus = 0x44;  // both playing
+        } else if (mpegStatus == mpeg::MPEGCardStatus::Playing) {
+            // Playing but partitions disconnected: treat as stopped.
+            opStatus = 0x11;
+        }
+    } else {
+        opStatus = 0x00;
+    }
+    if (!mpegReady) {
+        // Card physically absent: report statusCode=0xFF (matches the
+        // "no Movie Card inserted" hardware response).
+    } else {
+        switch (mpegStatus) {
+        case mpeg::MPEGCardStatus::Stopped:
+            // Card is present and idle. RR3 stays 0 -- the game may now
+            // safely issue MpegInit/MpegPlay/MpegSetConnection to start a
+            // new sequence (or move on to Track 1 data, which Lunar does
+            // after the FMV).
+            opStatus = 0x11;
+            break;
+        case mpeg::MPEGCardStatus::Playing:
+            rr3 |= 0x0001;  // video playing
+            opStatus = 0x44;
+            break;
+        case mpeg::MPEGCardStatus::Ended:
+            // Stream ended naturally (CD block finished Track 2). Report
+            // RR3=0x0000 (stopped/idle) once both partitions are
+            // disconnected by the game — Lunar expects this as the
+            // "decoder reports idle" signal that lets it issue a fresh
+            // $93 MpegInit and move on to Track 1 / title. While the
+            // partitions are still connected we keep RR3=0x0002
+            // (videoEnded) so games that poll the trailer for end-of-FMV
+            // see the natural end before the disconnect.
+            if (m_mpegAudBufNum == 0xFF && m_mpegVidBufNum == 0xFF) {
+                // Both partitions released: the layer can no longer
+                // produce output, so the decoder is effectively stopped.
+                opStatus = 0x11;
+            } else {
+                rr3 |= 0x0002;  // video ended, partitions still bound
+                opStatus = 0x11;  // video stopped, but ended just happened
+            }
+            break;
+        case mpeg::MPEGCardStatus::Error:
+            statusCode = 0x09;
+            break;
+        }
+    }
 
-void CDBlock::CmdMpegSetInterruptMask() {}
+    // Hot path: games poll $90 in tight loops (millions of times during FMV).
+    // Must stay trace-level; info floods stdout and roughly halves speed.
+    devlog::trace<grp::cmd>("--> MPEG get status (mpegStatus={}, auth={}, rr3={:04X}, opStatus={:02X})",
+                            static_cast<int>(mpegStatus), m_mpegAuthStatus, rr3, opStatus);
+
+    m_RR[0] = (statusCode << 8u) | opStatus;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = rr3;
+
+    SetInterrupt(kHIRQ_CMOK);
+}
+
+void CDBlock::CmdMpegGetInterrupt() {
+    devlog::trace<grp::cmd>("-> MPEG get interrupt");
+
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegCard.PeekInterruptFlags();
+    m_RR[2] = m_mpegInterruptMask;
+    m_RR[3] = 0;
+
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetInterruptMask() {
+    devlog::info<grp::cmd>("-> MPEG set interrupt mask");
+
+    m_mpegInterruptMask = m_CR[1];
+    // MVP: treat bits set in the mask command as acknowledged MPEG interrupts.
+    m_mpegCard.ClearInterruptFlags(m_mpegInterruptMask);
+
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegCard.PeekInterruptFlags();
+    m_RR[2] = m_mpegInterruptMask;
+    m_RR[3] = 0;
+
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
 void CDBlock::CmdMpegInit() {
-    devlog::trace<grp::cmd>("-> MPEG init");
+    devlog::info<grp::cmd>("-> MPEG init");
+    m_mpegCard.Reset();
+    m_packScan = {};
+    m_mpegSystemEndReached = false;
+    // MpegInit resets the display switch to off (matching erings mpegResetLatch
+    // which stores dispOn=false). The game re-enables it with $A0 before the
+    // next FMV starts.
+    m_mpegCard.SetDisplayEnabled(false);
+    m_mpegConnection = 0x0000; // MUST be 0x0000 so data flows without explicit MPEG set connection!
+    m_mpegStream = 0;
+    m_mpegDisplay = 0;
+    m_mpegMode = 0;
+    m_mpegDecodingMethod = 0;
+    m_mpegAudCon = 0;
+    m_mpegAudLay = 0;
+    m_mpegAudBufNum = 0xFF;
+    m_mpegVidCon = 0;
+    m_mpegVidLay = 0;
+    m_mpegVidBufNum = 0xFF;
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
-    // Input structure:
-    // 0x93     <blank>
-    // <blank>
-    // <blank>
-    // <blank>
+void CDBlock::CmdMpegSetMode() {
+    devlog::info<grp::cmd>("-> MPEG set mode");
+    m_mpegMode = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
-    // TODO: initialize MPEG stuff
-    devlog::info<grp::base>("MPEG init command is unimplemented");
-    YMIR_DEV_CHECK();
+void CDBlock::CmdMpegPlay() {
+    devlog::info<grp::cmd>("-> MPEG play");
+    // Start CD data flow and set MPEGCard to Playing state.
+    // The game will poll MpegGetStatus and see the actual status.
+    m_mpegCard.StartPlayback();
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
-    // Output structure:
-    // status code (FF=unauthenticated)  <blank>
-    // <blank>
-    // <blank>
-    // <blank>
-    m_RR[0] = 0xFF00;
+void CDBlock::CmdMpegSetDecodingMethod() {
+    devlog::info<grp::cmd>("-> MPEG set decoding method");
+    m_mpegDecodingMethod = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetConnection() {
+    // Kronos format (CR indices 0-3 = CR1-CR4):
+    // CR1[0] = cmd, CR1[1] = <blank> | audcon
+    // CR2[1] = audlay | audbufnum
+    // CR3[2] = next_sel | vidcon  (high byte of CR3 selects current/next)
+    // CR4[3] = vidlay | vidbufnum
+    //
+    // audcon/vidcon bit 7 set (=0x80) means "disconnect when stream ends"
+    // ("auto-stop"). Games set this bit when starting FMV they want to end
+    // naturally; we honor it by auto-disconnecting MPEG buffers when the
+    // decoder signals end-of-stream.
+    //
+    // Setting audcon or vidcon (any value) is itself a "disconnect now"
+    // request from the game — Lunar uses this as its user-initiated exit
+    // path ($9A after Start pressed via INTBACK), and also as the auto-stop
+    // marker for the natural-end-of-stream path. Either way, the MPEG
+    // card must transition out of Playing so $AF reports Ended and the
+    // game's MPEG-polling loop exits.
+    devlog::info<grp::cmd>("-> MPEG set connection (CR1={:04X} CR2={:04X} CR3={:04X} CR4={:04X})", m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+    // Always apply the connection update. The real hardware has a "next"
+    // register selected by the high byte of CR3, but we don't model the
+    // current/next split -- applying immediately is sufficient for all known
+    // games. Skipping the update when isNext==true caused Lunar's Start-button
+    // disconnect (CR3=0x01FF, all bufnum=0xFF) to be silently ignored, leaving
+    // the MPEG card stuck in Playing forever.
+    m_mpegAudCon = m_CR[0] & 0xFF;
+    m_mpegAudLay = m_CR[1] >> 8;
+    m_mpegAudBufNum = m_CR[1] & 0xFF;
+    m_mpegVidCon = m_CR[2] & 0xFF;
+    m_mpegVidLay = m_CR[3] >> 8;
+    m_mpegVidBufNum = m_CR[3] & 0xFF;
+
+    // If the game requests auto-stop on end-of-stream, the FMV will only
+    // be played once. Disable disc repeat up front so the CD block cannot
+    // restart the read when it reaches the end of the FAD range
+    // (CheckDiscRead would loop back to m_playStartPos based on
+    // m_playMaxRepeat). Without this, the disc loops the FMV indefinitely.
+    const bool autoStopAudio = (m_mpegAudCon & 0x80) != 0;
+    const bool autoStopVideo = (m_mpegVidCon & 0x80) != 0;
+    if ((autoStopAudio || autoStopVideo) && m_mpegAuthStatus == 2) {
+        m_playMaxRepeat = 0;
+        m_status.repeatCount = 0xF;
+    }
+
+    // If both partitions are now disconnected (0xFF) and the card is still
+    // Playing, stop playback. The game's poll loop after disconnecting
+    // (via Start button or natural end) checks $90 for the card to leave
+    // the Playing state. Only transition Playing -> Ended; do NOT call
+    // Reset() here. The driver's MpegInit/MpegSetConnection sequence is
+    // still in flight: it may issue more SetConnection calls (to move to
+    // Track 1 data, etc.), and Reset() would drop m_currentFrame mid-
+    // hand-off while the VDP2 overlay is still drawing the preserved
+    // last frame as a backdrop.
+    if (m_mpegAudBufNum == 0xFF && m_mpegVidBufNum == 0xFF &&
+        m_mpegCard.GetStatus() == mpeg::MPEGCardStatus::Playing) {
+        devlog::info<grp::cmd>("MPEG set connection: both partitions disconnected, stopping playback (Stopped, frame preserved)");
+        m_mpegCard.StopPlayback();
+        m_packScan = {};
+        m_mpegSystemEndReached = false;
+    }
+
+    m_mpegConnection = m_CR[0];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_CR[0];
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegGetConnection() {
+    // Kronos format:
+    // CR1 = (status << 8) | audcon
+    // CR2 = (audlay << 8) | audbufnum
+    // CR3 = vidcon
+    // CR4 = (vidlay << 8) | vidbufnum
+    //
+    // After init, audbufnum=0xFF and vidbufnum=0xFF (disconnected).
+    // The game checks these buffer numbers to determine if MPEG buffers are valid.
+    // Hot path: $9B polled with $90/$9E during FMV; keep at trace.
+    devlog::trace<grp::cmd>("-> MPEG get connection");
+    m_RR[0] = (GetStatusCode() << 8u) | (m_mpegAudCon & 0xFFu);
+    m_RR[1] = ((m_mpegAudLay & 0xFFu) << 8u) | (m_mpegAudBufNum & 0xFFu);
+    m_RR[2] = m_mpegVidCon & 0xFFu;
+    m_RR[3] = ((m_mpegVidLay & 0xFFu) << 8u) | (m_mpegVidBufNum & 0xFFu);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetStream() {
+    devlog::info<grp::cmd>("-> MPEG set stream");
+    m_mpegStream = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegStream;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegGetStream() {
+    // Hot path: $9E polled with $90/$9B during FMV; keep at trace.
+    devlog::trace<grp::cmd>("-> MPEG get stream");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegStream;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegDisplay() {
+    devlog::info<grp::cmd>("-> MPEG display (CR={:04X} {:04X} {:04X} {:04X})", m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+    m_mpegDisplay = m_CR[1];
+    // $A0 Display: CR2 high byte = display switch (0=off, nonzero=on).
+    // The game turns the MPEG display off when transitioning from FMV to
+    // the title screen (or any non-FMV screen). The video overlay checks
+    // this flag to stop blitting the last decoded FMV frame.
+    const bool displayOn = (m_CR[1] >> 8) != 0;
+    m_mpegCard.SetDisplayEnabled(displayOn);
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = m_mpegDisplay;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetWindow() {
+    devlog::info<grp::cmd>("-> MPEG set window");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetBorderColor() {
+    devlog::info<grp::cmd>("-> MPEG set border color");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetFade() {
+    devlog::info<grp::cmd>("-> MPEG set fade");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetVideoEffects() {
+    devlog::info<grp::cmd>("-> MPEG set video effects");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegSetLSI() {
+    // CR2 low byte contains the LSI register number being accessed.
+    const uint8 reg = m_CR[1] & 0xFF;
+
+    // Can be polled frequently; keep at trace.
+    devlog::trace<grp::cmd>("-> MPEG set LSI (reg={})", reg);
+
+    const auto mpegStatus = m_mpegCard.GetStatus();
+    uint16 mpegStatusBits = 0;
+
+    if (reg == 6) {
+        // Register 6: decoder operation status.
+        // bit 14 (0x4000) = video decoder idle (not actively decoding).
+        // When the decoder is Playing, bit 14 is clear (busy).
+        // When the decoder has Ended or Stopped, bit 14 is set (idle).
+        // This is what Lunar polls to know the FMV finished and it can
+        // proceed to the title screen.
+        if (mpegStatus == mpeg::MPEGCardStatus::Playing &&
+            (m_mpegAudBufNum != 0xFF || m_mpegVidBufNum != 0xFF)) {
+            mpegStatusBits = 0x0000;  // decoder still busy / partitions connected
+        } else {
+            mpegStatusBits = 0x4000;  // decoder idle
+        }
+    } else {
+        // For other registers, keep the old simple mapping as fallback.
+        switch (mpegStatus) {
+        case mpeg::MPEGCardStatus::Playing:
+            mpegStatusBits = 0x0001;
+            break;
+        case mpeg::MPEGCardStatus::Ended:
+            mpegStatusBits = 0x0002;
+            break;
+        case mpeg::MPEGCardStatus::Stopped:
+            mpegStatusBits = 0x0000;
+            break;
+        default:
+            break;
+        }
+    }
+
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = mpegStatusBits;
+
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegChangeConnection() {
+    // $9C commits the "next" connection records staged by $9A/$9D into the
+    // "current" records. CR2 holds per-layer selector bytes: bit 7 of each
+    // half-byte masks that layer's switch (skips it, keeping its current
+    // binding). Lunar uses this on user-skip: first $9A programs a next =
+    // disconnect (both layers), then $9C switches the audio layer with mask
+    // bit 7 set on video (or vice versa), cutting both decoders off their
+    // partitions without extra commands.
+    //
+    // We don't model the current/next split (SetConnection already applied
+    // the new connections immediately when it staged them), so this command
+    // is essentially a no-op for our state. Return the standard MPEG status
+    // report so the host's poll loop sees a well-formed reply.
+    devlog::info<grp::cmd>("-> MPEG change connection (CR1={:04X} CR2={:04X} CR3={:04X} CR4={:04X})",
+                           m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+
+    // The decoder is effectively disconnected when both partition numbers are
+    // 0xFF. Promote Playing -> Ended so subsequent $90 polls report
+    // videoEnded and the game's MPEG loop exits.
+    if (m_mpegAudBufNum == 0xFF && m_mpegVidBufNum == 0xFF &&
+        m_mpegCard.GetStatus() == mpeg::MPEGCardStatus::Playing) {
+        m_mpegCard.StopPlayback();
+    }
+
+    m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
     m_RR[3] = 0;
 
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPST);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
-void CDBlock::CmdMpegSetMode() {}
+void CDBlock::CmdMpegGetLsi() {
+    // $AE reads an MPEG LSI register. CR2 low byte is the byte-offset
+    // register number; CR1 bit 1 selects between LSI A (0) and LSI B (1)
+    // for cards that have two. The Saturn Movie Card only exposes LSI A
+    // (CR1=AE00, the trace shape Lunar uses), so we ignore the window
+    // select.
+    //
+    // Lunar uses this to clear+read register 0x1A (video status) on
+    // user-skip. We don't model a register file precisely, but register
+    // 0x1A is the video-status report word: bit 14 = decoder idle.
+    // Return the same decoder-idle bit $AF would for register 6, since
+    // games only ever rely on the idle bit for either register.
+    const uint8 reg = m_CR[1] & 0xFF;
 
-void CDBlock::CmdMpegPlay() {}
+    // Can be polled on skip/status paths; keep at trace.
+    devlog::trace<grp::cmd>("-> MPEG get LSI (reg={})", reg);
 
-void CDBlock::CmdMpegSetDecodingMethod() {}
+    uint16 regValue = 0;
+    if (reg == 0x1A || reg == 6) {
+        // Video status / decoder operation status:
+        //   bit 14 (0x4000) set = decoder idle
+        //   bit 14 clear        = decoder active
+        if (m_mpegCard.GetStatus() != mpeg::MPEGCardStatus::Playing) {
+            regValue |= 0x4000;
+        }
+    }
 
-void CDBlock::CmdMpegSetConnection() {}
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = regValue;
 
-void CDBlock::CmdMpegGetConnection() {}
-
-void CDBlock::CmdMpegSetStream() {}
-
-void CDBlock::CmdMpegGetStream() {}
-
-void CDBlock::CmdMpegDisplay() {}
-
-void CDBlock::CmdMpegSetWindow() {}
-
-void CDBlock::CmdMpegSetBorderColor() {}
-
-void CDBlock::CmdMpegSetFade() {}
-
-void CDBlock::CmdMpegSetVideoEffects() {}
-
-void CDBlock::CmdMpegSetLSI() {}
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
 
 void CDBlock::CmdAuthenticateDevice() {
     devlog::trace<grp::cmd>("-> Authenticate device");
@@ -3379,7 +4062,14 @@ void CDBlock::CmdIsDeviceAuthenticated() {
     SetInterrupt(kHIRQ_CMOK);
 }
 
-void CDBlock::CmdGetMpegROM() {}
+void CDBlock::CmdGetMpegROM() {
+    devlog::trace<grp::cmd>("-> Get MPEG ROM");
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK);
+}
 
 // -----------------------------------------------------------------------------
 // Probe implementation

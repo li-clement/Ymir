@@ -1,5 +1,11 @@
 ## Create the executable target
 add_executable(ymir-core-tests
+    src/hw/mpeg/cdblock_mpeg_command_tests.cpp
+    src/hw/mpeg/mpeg_audio_tests.cpp
+    src/hw/mpeg/mpeg_card_tests.cpp
+    src/hw/mpeg/mpeg_decoder_tests.cpp
+    src/hw/mpeg/mpeg_overlay_tests.cpp
+
     src/hw/scu/scu_dsp_tests.cpp
 
     src/hw/sh2/sh2_disasm_tests.cpp

@@ -45,6 +45,7 @@ namespace settings::cdblock {
 
     void CDReadSpeed(SharedContext &ctx);
     void CDBlockLLE(SharedContext &ctx);
+    void MovieCardEnabled(SharedContext &ctx);
 
 } // namespace settings::cdblock
 

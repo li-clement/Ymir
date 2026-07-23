@@ -209,6 +209,14 @@ void CDBlockSettingsView::Display() {
     ImGui::PopFont();
 
     widgets::settings::cdblock::CDReadSpeed(m_context);
+
+    ImGui::Separator();
+
+    ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.large);
+    ImGui::SeparatorText("Movie Card");
+    ImGui::PopFont();
+
+    widgets::settings::cdblock::MovieCardEnabled(m_context);
 }
 
 void CDBlockSettingsView::ProcessLoadCDBlockROM(void *userdata, std::filesystem::path file, int filter) {

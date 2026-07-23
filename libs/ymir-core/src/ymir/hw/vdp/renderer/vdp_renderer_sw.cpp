@@ -1,5 +1,7 @@
 #include <ymir/hw/vdp/renderer/vdp_renderer_sw.hpp>
 
+#include <ymir/hw/mpeg/mpeg_overlay.hpp>
+
 #include <ymir/util/constexpr_for.hpp>
 #include <ymir/util/dev_log.hpp>
 #include <ymir/util/inline.hpp>
@@ -552,7 +554,17 @@ void SoftwareVDPRenderer::VDP2EndFrame() {
         Callbacks.VDP2ResolutionChanged(m_HRes, m_VRes);
     }
     Callbacks.VDP2DrawFinished();
+    DrawMPEGVideoOverlay();
     SwCallbacks.FrameComplete(m_framebuffer.data(), m_HRes, m_VRes);
+}
+
+void SoftwareVDPRenderer::DrawMPEGVideoOverlay() {
+    if (m_mpegCard == nullptr) {
+        return;
+    }
+    mpeg::MPEGVideoOverlay overlay;
+    overlay.BlitLatestFrame(*m_mpegCard, std::span<uint32>{m_framebuffer.data(), static_cast<size_t>(m_HRes) * m_VRes},
+                            m_HRes, m_VRes);
 }
 
 // -----------------------------------------------------------------------------
@@ -4179,7 +4191,9 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         for (uint32 x = 0; Color888 &outputColor : framebufferOutput) {
             if (layer0ColorOffsetEnabled[x]) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[scanline_layers[x][0]]];
-                outputColor = {
+                // Construct-then-assign: Apple clang rejects bare designated-init
+                // assignment onto an existing Color888 union lvalue.
+                outputColor = Color888{
                     .r = kColorOffsetLUT[colorOffset.r][outputColor.r],
                     .g = kColorOffsetLUT[colorOffset.g][outputColor.g],
                     .b = kColorOffsetLUT[colorOffset.b][outputColor.b],
@@ -4237,7 +4251,9 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             for (uint32 x = 0; Color888 &mesheColor : meshOut) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[LYR_Sprite]];
                 if (colorOffset.nonZero) {
-                    mesheColor = {
+                    // Construct-then-assign: Apple clang rejects bare designated-init
+                    // assignment onto an existing Color888 union lvalue.
+                    mesheColor = Color888{
                         .r = kColorOffsetLUT[colorOffset.r][mesheColor.r],
                         .g = kColorOffsetLUT[colorOffset.g][mesheColor.g],
                         .b = kColorOffsetLUT[colorOffset.b][mesheColor.b],

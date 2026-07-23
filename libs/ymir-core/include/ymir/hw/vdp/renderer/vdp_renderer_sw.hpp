@@ -13,6 +13,8 @@
 #include <ymir/hw/vdp/vdp_defs.hpp>
 #include <ymir/hw/vdp/vdp_state.hpp>
 
+#include <ymir/hw/mpeg/mpeg_card.hpp>
+
 #include <ymir/hw/vdp/renderer/common/vdp1_steppers.hpp>
 
 #include <ymir/hw/hw_defs.hpp>
@@ -159,6 +161,12 @@ public:
     // Utilities
 
     void DumpExtraVDP1Framebuffers(std::ostream &out) const override;
+
+    /// @brief Sets the MPEG card reference for video overlay.
+    /// Pass nullptr to disable overlay.
+    void SetMPEGCard(const mpeg::MPEGCard *card) {
+        m_mpegCard = card;
+    }
 
 private:
     VDPState &m_state;
@@ -931,6 +939,12 @@ private:
 
     // Current display framebuffer.
     std::array<uint32, kMaxResH * kMaxResV> m_framebuffer;
+
+    const mpeg::MPEGCard *m_mpegCard = nullptr;
+
+    void DrawMPEGVideoOverlay();
+
+private:
 
     // Retrieves the current set of VDP2 registers.
     VDP2Regs &VDP2GetRegs();

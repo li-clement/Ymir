@@ -421,6 +421,23 @@ namespace settings::cdblock {
         }
     }
 
+    void MovieCardEnabled(SharedContext &ctx) {
+        auto &settings = ctx.serviceLocator.GetRequired<Settings>();
+        auto &cdblockSettings = settings.cdblock;
+
+        bool enabled = cdblockSettings.movieCardEnabled;
+        if (settings.MakeDirty(ImGui::Checkbox("Enable Movie Card (MPEG video)", &enabled))) {
+            cdblockSettings.movieCardEnabled = enabled;
+        }
+        widgets::ExplanationTooltip(
+            "Enables emulation of the optional MPEG video card expansion.\\n"
+            "When enabled, decoded MPEG video is overlaid onto the VDP framebuffer\\n"
+            "and MPEG audio is mixed into the audio output.\\n"
+            "\\n"
+            "This is an experimental feature.",
+            ctx.displayScale);
+    }
+
 } // namespace settings::cdblock
 
 } // namespace app::ui::widgets

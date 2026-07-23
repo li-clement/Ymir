@@ -103,6 +103,7 @@ static const std::unordered_map<std::string_view, GameInfo> kGameInfosByCode = {
     // These need improved overall system timings. All of them result in FMVs being clipped.
     {"T-27901G",  {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Lunar - Silver Star Story (Japan)
     {"ST-27901G", {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Lunar - Silver Star Story (Japan) (Demo)
+    {"T-27904G",  {.flags = RelaxedVDP2BitmapCPAccessChecks | MovieCard}}, // Lunar - Silver Star Story (Japan) (MPEG version)
     {"GS-9088",   {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Mechanical Violator Hakaider - Last Judgement (Japan)
     {"T-2105G",   {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Shin Kaitei Gunkan - Koutetsu no Kodoku (Japan)
 
