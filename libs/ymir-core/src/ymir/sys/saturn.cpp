@@ -154,7 +154,13 @@ Saturn::Saturn()
     ConfigureAccessCycles(false);
 
     // Wire Movie Card video overlay into the software VDP renderer.
-    CDBlock.SetMovieCardPresent(true);
+    // Only enable the Movie Card if the game requires it (game DB MovieCard
+    // flag) or the user explicitly enabled it in settings. Vatlva and other
+    // games that detect the card at boot fall back to non-MPEG FMV when the
+    // card is absent.
+    if (configuration.cdblock.movieCardEnabled.Get()) {
+        CDBlock.SetMovieCardPresent(true);
+    }
     if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
         swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
     }
@@ -172,8 +178,7 @@ Saturn::Saturn()
         [&](core::config::sys::VideoStandard videoStandard) { UpdateVideoStandard(videoStandard); });
     configuration.cdblock.useLLE.Observe([&](bool enabled) { SetCDBlockLLE(enabled); });
     configuration.cdblock.movieCardEnabled.Observe([&](bool enabled) {
-        // Unconditionally keep the movie card present and wired
-        CDBlock.SetMovieCardPresent(true);
+        CDBlock.SetMovieCardPresent(enabled);
         if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
             swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
         }
@@ -548,8 +553,6 @@ void Saturn::RunFrameImpl() {
         // pl_mpeg has reached end-of-stream; tell the card to finalize so its
         // status transitions Playing -> Ended. MpegGetStatus/$AF will then
         // report videoEnded=true and the game exits its MPEG polling loop.
-        // The last decoded frame is preserved in m_currentFrame so the VDP
-        // overlay keeps displaying the final image until it is cleared.
         mpegCard.SignalEndOfStream();
     }
     if (mpegStatus == ymir::mpeg::MPEGCardStatus::Playing ||
@@ -558,6 +561,38 @@ void Saturn::RunFrameImpl() {
         // current overlay frame for the title screen instead of clearing).
         if (mpegStatus == ymir::mpeg::MPEGCardStatus::Ended) {
             // Leave the last decoded frame in place for overlay rendering.
+        } else if (mpegCard.GetDecodeTiming() == ymir::mpeg::MPEGDecodeTiming::Host) {
+            // Host-synchronized decode ($94 decode timing 1, Vatlva):
+            // the game issues $97 MpegOutDecodingSync to step pictures one
+            // at a time (about every other VBlank for a 29.97fps stream).
+            // For titles that never call $97 (interrupt-delivery issues),
+            // we fall back to VSYNC-paced decode: decode one frame per
+            // VBlank if the current frame's time stamp has passed.
+            // The first picture must decode autonomously before any $97
+            // arrives (erings: "a host-synchronized title waits for
+            // picture-start before its first $97").
+            if (mpegCard.HasHostDecodeStep()) {
+                mpegCard.ConsumeHostDecodeStep();
+                mpegCard.DecodeNextFrame();
+                CDBlock.PumpMPEGInterrupts();
+            } else if (!mpegCard.HasCurrentFrame() && mpegCard.HasHeaders()) {
+                // First picture: decode autonomously to trigger the
+                // picture-start interrupt that wakes the game's $97 loop.
+                mpegCard.DecodeNextFrame();
+                CDBlock.PumpMPEGInterrupts();
+            } else {
+                // Fallback VSYNC pacing: if no $97 step is pending and we
+                // already have a frame, decode the next one when its
+                // timestamp passes. This keeps Vatlva moving even when
+                // the game's interrupt handler never issues $97.
+                const double displayHz =
+                    (GetVideoStandard() == core::config::sys::VideoStandard::PAL) ? 50.0 : 60.0;
+                m_mpegClockSeconds += 1.0 / displayHz;
+                if (mpegCard.HasCurrentFrame() &&
+                    mpegCard.GetCurrentFrame().time < m_mpegClockSeconds) {
+                    mpegCard.DecodeNextFrame();
+                }
+            }
         } else {
             const double displayHz =
                 (GetVideoStandard() == core::config::sys::VideoStandard::PAL) ? 50.0 : 60.0;
@@ -568,14 +603,6 @@ void Saturn::RunFrameImpl() {
                 if (!mpegCard.HasCurrentFrame() ||
                     mpegCard.GetCurrentFrame().time < m_mpegClockSeconds) {
                     if (!mpegCard.DecodeNextFrame()) {
-                        // Decoder produced no new frame. This can happen
-                        // mid-FMV when the CD block hasn't fed enough data
-                        // yet (disc seek, filter routing delay, etc.).
-                        // Do NOT finalise end-of-stream here -- wait for
-                        // pl_mpeg's own HasStreamEnded() to fire (checked
-                        // at the top of this block on the next VBlank).
-                        // The old 1-second timeout was too aggressive and
-                        // caused premature freeze during normal playback.
                         break;
                     }
                 } else {
@@ -939,11 +966,11 @@ void Saturn::OnMediaChanged() {
         hasFlag(db::GameInfo::Flags::RelaxedVDP2BitmapCPAccessChecks);
     VDP.SetVirtuaGunJitter(hasFlag(db::GameInfo::Flags::VirtuaGunJitter));
 
-    // Auto-enable Movie Card for games that require it
-    if (hasFlag(db::GameInfo::Flags::MovieCard)) {
-        configuration.cdblock.movieCardEnabled = true;
-        configuration.NotifyObservers();
-    }
+    // Auto-enable Movie Card for games that require it; disable for games
+    // that don't (so a previous Lunar session doesn't leak the card into
+    // a Vatlva session that should fall back to non-MPEG FMV).
+    configuration.cdblock.movieCardEnabled = hasFlag(db::GameInfo::Flags::MovieCard);
+    configuration.NotifyObservers();
 }
 
 // -----------------------------------------------------------------------------

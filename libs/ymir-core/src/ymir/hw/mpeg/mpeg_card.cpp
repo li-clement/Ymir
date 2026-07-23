@@ -24,6 +24,11 @@ void MPEGCard::Reset() {
     m_interruptFlags = kMPEGCardInterruptNone;
     m_endOfStream = false;
     m_displayEnabled = false;
+    m_hostDecodeSteps = 0;
+    m_decodeTiming = MPEGDecodeTiming::VSYNC;
+    m_videoPaused = false;
+    m_videoFrozen = false;
+    m_playMode = 0;
 }
 
 void MPEGCard::Initialize() {
@@ -33,7 +38,7 @@ void MPEGCard::Initialize() {
 void MPEGCard::OpenNewPlaybackPipeline() {
     // Match erings: $95 after a spent stream replaces the play object.
     // Without this, pl_mpeg still holds the previous PS/ES + EOF flag and the
-    // VDP pacing clock still compares against the old frame.time — Lunar's
+    // VDP pacing clock still compares against the old frame.time - Lunar's
     // 2nd/3rd in-game FMVs then flash wrong-stream frames or skip ahead.
     m_decoder.Reset();
     m_currentFrame.reset();
@@ -42,6 +47,7 @@ void MPEGCard::OpenNewPlaybackPipeline() {
     m_endOfStream = false;
     m_interruptFlags = kMPEGCardInterruptNone;
     m_presentationClockReset = true;
+    m_hostDecodeSteps = 0;
 }
 
 void MPEGCard::StartPlayback() {
@@ -121,12 +127,16 @@ void MPEGCard::SignalEndOfStream() {
 }
 
 bool MPEGCard::DecodeNextFrame() {
+    // $96 pause-time 0 halts picture decode (erings vidPaused).
+    if (m_videoPaused) {
+        return false;
+    }
     auto frame = m_decoder.DecodeFrame();
     if (!frame.has_value()) {
         // No more frames available. Once pl_mpeg has finalised end-of-stream
         // (or we were told via SignalEndOfStream and all buffered frames were
         // consumed), promote the card status from Playing to Ended so the
-        // game's \$AF poll exits its MPEG playback loop. Stay Ended across
+        // game's $AF poll exits its MPEG playback loop. Stay Ended across
         // continued decode attempts until the next CmdMpegPlay resets state.
         if (m_status == MPEGCardStatus::Playing && (m_endOfStream || m_decoder.HasEnded())) {
             m_status = MPEGCardStatus::Ended;
@@ -137,7 +147,12 @@ bool MPEGCard::DecodeNextFrame() {
         return false;
     }
 
-    m_currentFrame = std::move(frame);
+    // $96 freeze-time 0 holds the displayed picture while decode continues
+    // (erings vidFrozen). The frame is decoded (advancing internal reference
+    // frames) but not published to the overlay.
+    if (!m_videoFrozen) {
+        m_currentFrame = std::move(frame);
+    }
     m_interruptFlags |= kMPEGCardInterruptFrameDecoded;
     return true;
 }

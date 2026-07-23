@@ -43,6 +43,15 @@ public:
     void Append(std::span<const uint8> data);
     void SignalEndOfStream();
 
+    // Raw video elementary stream mode (Vatlva). The stream is a raw MPEG-1
+    // video ES (starts with 00 00 01 B3 sequence header, no PS pack layer).
+    // InitVideoES switches the decoder to plm_video_t-only mode; subsequent
+    // Append/DecodeFrame calls go through the ES path, fully isolated from
+    // the plm_t PS-demux pipeline used by Lunar.
+    void InitVideoES();
+    [[nodiscard]] bool IsVideoES() const;
+    void ResetVideoES();
+
     [[nodiscard]] bool HasHeaders() const;
     [[nodiscard]] uint32 GetWidth() const;
     [[nodiscard]] uint32 GetHeight() const;

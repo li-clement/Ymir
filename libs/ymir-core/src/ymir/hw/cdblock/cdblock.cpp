@@ -136,6 +136,13 @@ void CDBlock::Reset(bool hard) {
     m_mpegDisplay = 0;
     m_mpegMode = 0;
     m_mpegDecodingMethod = 0;
+    m_mpegMovieMode = 0xFF;
+    m_mpegDecodeTiming = 0;
+    m_mpegScanMode = 0;
+    m_mpegPlayMode = 0;
+    m_mpegAudioMute = 0x04;
+    m_mpegVidPaused = false;
+    m_mpegVidFrozen = false;
     m_mpegAudCon = 0;
     m_mpegAudLay = 0;
     m_mpegAudBufNum = 0xFF;
@@ -690,7 +697,6 @@ void CDBlock::PokeReg(uint32 address, T value) {
         case 0x02: m_xferBuffer[m_xferBufferPos % m_xferBuffer.size()] = value; break;
 
         case 0x08: m_HIRQ = value; break;
-        case 0x0C: m_HIRQMASK = value; break;
 
         case 0x18: m_CR[0] = value; break;
         case 0x1C: m_CR[1] = value; break;
@@ -1287,22 +1293,95 @@ void CDBlock::FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer) {
         return;
     }
 
+    // If the decoder is already in raw video ES mode (Vatlva), feed every
+    // sector directly to the ES decoder without scanning for PS start codes.
+    // Mid-stream ES sectors do not start with 00 00 01 -- they contain
+    // arbitrary compressed video data -- so the start code scan below would
+    // wrongly skip them.
+    if (m_mpegCard.IsVideoES()) {
+        // Raw video ES path (Vatlva): feed the sector payload directly to the
+        // ES decoder. We do NOT scan for 00 00 01 B7 (sequence_end_code) here
+        // because compressed video data can contain that byte pattern as a
+        // false positive (the MPEG spec says encoders should stuff bytes to
+        // prevent it, but real-world encoders don't always comply). Instead,
+        // stream end is detected by:
+        //   1. XA submode EOF (bit 7) - always ends the stream
+        //   2. XA submode EOR (bit 0) with connection-mode bit 0x01
+        //   3. plm_video_has_ended() returning true after all data is consumed
+        m_mpegCard.AppendStreamData(std::span<const uint8>{buffer.data}.subspan(offset, size));
+
+        // XA submode EOR (bit 0) and EOF (bit 7): check connection mode bits.
+        const bool eor = (buffer.subheader.submode & 0x01) != 0 && (m_mpegVidCon & 0x01) != 0;
+        const bool eof = (buffer.subheader.submode & 0x80) != 0;
+        if (eor || eof) {
+            m_mpegCard.AppendStreamData(std::span<const uint8>{
+                reinterpret_cast<const uint8 *>("\x00\x00\x01\x00"), 4});
+            m_mpegCard.RequestEndOfStream();
+            devlog::debug<grp::base>("FeedMPEGStream: video ES end (eor={}, eof={}), EOS signalled", eor, eof);
+        }
+        return;
+    }
+
     // Scan for MPEG-1 Program Stream pack start code (0x00 0x00 0x01 0xBA).
     // The start code may not be at the beginning of the first sector because
     // CD-XA sectors can contain padding. Scan the entire payload.
+    //
+    // Vatlva uses a raw video elementary stream (starts with 00 00 01 B3,
+    // video sequence header, no PS pack layer). The ES probe fires on the
+    // first sector after $9A SetConnection: if the payload starts with B3
+    // (or we find B3 before BA), we switch the decoder to plm_video_t ES
+    // mode and feed all subsequent sectors directly to the ES buffer.
+    // This path is fully isolated from the Lunar PS path below.
     bool hasMpegStartCode = false;
+    bool isVideoES = false;
     for (uint32 i = 0; i + 3 < size; i++) {
         if (buffer.data[offset + i] == 0x00 &&
             buffer.data[offset + i + 1] == 0x00 &&
-            buffer.data[offset + i + 2] == 0x01 &&
-            buffer.data[offset + i + 3] == 0xBA) {
-            hasMpegStartCode = true;
-            // Adjust offset to start from the pack start code
-            offset += i;
-            size -= i;
-            break;
+            buffer.data[offset + i + 2] == 0x01) {
+            const uint8 code = buffer.data[offset + i + 3];
+            if (code == 0xBA) {
+                hasMpegStartCode = true;
+                // Adjust offset to start from the pack start code
+                offset += i;
+                size -= i;
+                break;
+            }
+            if (code == 0xB3 && m_mpegESProbePending) {
+                // Raw video ES: MPEG video sequence header.
+                isVideoES = true;
+                if (i > 0) {
+                    offset += i;
+                    size -= i;
+                }
+                break;
+            }
+            // Other start codes (0xB8 GOP, 0x00 picture, 0x01 slice, etc.)
+            // are within a video ES stream. If we're already in ES mode,
+            // this is normal ES data; don't skip it.
+            if (m_mpegCard.IsVideoES()) {
+                isVideoES = true;
+                break;
+            }
         }
     }
+
+    if (isVideoES && m_mpegESProbePending) {
+        // First sector of a raw video ES stream: switch decoder to ES mode.
+        devlog::info<grp::base>("FeedMPEGStream: raw video ES detected (00 00 01 B3), switching to ES-only decoder");
+        m_mpegCard.InitVideoES();
+        m_mpegESProbePending = false;
+    }
+
+    if (isVideoES) {
+        // First sector of raw video ES (Vatlva): just feed the data to the
+        // ES decoder. B7/EOR/EOF scanning is handled by the early IsVideoES()
+        // check above for all subsequent sectors. We must NOT scan for B7 here
+        // because the first sector's compressed video data can contain the
+        // byte pattern 00 00 01 B7 as a false positive.
+        m_mpegCard.AppendStreamData(std::span<const uint8>{buffer.data}.subspan(offset, size));
+        return;
+    }
+
     if (!hasMpegStartCode) {
         // Not an MPEG sector - skip without feeding to decoder
         static int skipCount = 0;
@@ -1315,7 +1394,7 @@ void CDBlock::FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer) {
 
     // Hot path: one sector can arrive many times per frame during FMV. Keep at
     // trace so default debug builds do not flood stdout and halve speed.
-    devlog::trace<grp::base>("FeedMPEGStream: feeding {} bytes to MPEG decoder (partition={}, offset={})", size, partitionIndex, offset);
+    devlog::trace<grp::base>("FeedMPEGStream: feeding {} bytes to video ES decoder (partition={})", size, partitionIndex);
 
     // Parse the system layer of the freshly-fed payload so we can detect the
     // MPEG-PS program-end code (00 00 01 B9) and synthesise the hardware
@@ -1498,6 +1577,22 @@ void CDBlock::CheckPlayEnd() {
 void CDBlock::SetInterrupt(uint16 bits) {
     m_HIRQ |= bits;
     UpdateInterrupts();
+}
+
+void CDBlock::PumpMPEGInterrupts() {
+    // The pacing loop (saturn.cpp) decodes MPEG frames outside the CDBlock
+    // command handler context. When DecodeNextFrame succeeds it sets the
+    // kMPEGCardInterruptPictureStart flag on the card. The game (Vatlva)
+    // polls for this via $91 GetInterrupt, which is gated by kHIRQ_MPST.
+    // Fire MPST if there are any pending interrupt flags. The MPEG cause
+    // mask (m_mpegInterruptMask) gates which causes the game ACKS via $91,
+    // but MPST must assert for the SH2 to wake up regardless -- matching
+    // erings mpegIntCause which sets MPST whenever any cause latches.
+    const auto flags = m_mpegCard.PeekInterruptFlags();
+    if (flags != mpeg::kMPEGCardInterruptNone) {
+        m_HIRQ |= kHIRQ_MPST;
+        UpdateInterrupts();
+    }
 }
 
 void CDBlock::UpdateInterrupts() {
@@ -2017,17 +2112,20 @@ FORCE_INLINE void CDBlock::ProcessCommand() {
     case 0x94: CmdMpegSetMode(); break;
     case 0x95: CmdMpegPlay(); break;
     case 0x96: CmdMpegSetDecodingMethod(); break;
+    case 0x97: CmdMpegOutDecodingSync(); break;
     case 0x9A: CmdMpegSetConnection(); break;
     case 0x9B: CmdMpegGetConnection(); break;
     case 0x9C: CmdMpegChangeConnection(); break;
     case 0x9D: CmdMpegSetStream(); break;
     case 0x9E: CmdMpegGetStream(); break;
+    case 0x9F: CmdMpegGetPictureSize(); break;
 
     case 0xA0: CmdMpegDisplay(); break;
     case 0xA1: CmdMpegSetWindow(); break;
     case 0xA2: CmdMpegSetBorderColor(); break;
     case 0xA3: CmdMpegSetFade(); break;
     case 0xA4: CmdMpegSetVideoEffects(); break;
+    case 0xAE: CmdMpegGetLsi(); break;
     case 0xAF: CmdMpegSetLSI(); break;
 
     case 0xE0: CmdAuthenticateDevice(); break;
@@ -3639,37 +3737,45 @@ void CDBlock::CmdMpegGetStatus() {
     m_RR[2] = 0;
     m_RR[3] = rr3;
 
-    SetInterrupt(kHIRQ_CMOK);
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegGetInterrupt() {
     devlog::trace<grp::cmd>("-> MPEG get interrupt");
 
-    m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = m_mpegCard.PeekInterruptFlags();
-    m_RR[2] = m_mpegInterruptMask;
+    // $91 returns the 24-bit MPEG interrupt cause register and clears it:
+    //   CR1 low byte = cause bits 23-16 (currently always 0)
+    //   CR2 = cause bits 15-0
+    const auto flags = m_mpegCard.TakeInterruptFlags();
+    m_RR[0] = (GetStatusCode() << 8u) | ((flags >> 8) & 0xFF);
+    m_RR[1] = flags & 0xFF;
+    m_RR[2] = static_cast<uint16>(m_mpegInterruptMask & 0xFFFF);
     m_RR[3] = 0;
 
     SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 
 void CDBlock::CmdMpegSetInterruptMask() {
-    devlog::info<grp::cmd>("-> MPEG set interrupt mask");
+    devlog::info<grp::cmd>("-> MPEG set interrupt mask (CR1={:04X} CR2={:04X})", m_CR[0], m_CR[1]);
 
-    m_mpegInterruptMask = m_CR[1];
-    // MVP: treat bits set in the mask command as acknowledged MPEG interrupts.
-    m_mpegCard.ClearInterruptFlags(m_mpegInterruptMask);
+    // $92 packs the 24-bit mask the same way as $91: CR1 low byte = bits
+    // 23-16, CR2 = bits 15-0. erings: intMask = (cmd[0]&0xFF)<<16 | cmd[1].
+    m_mpegInterruptMask = (static_cast<uint32>(m_CR[0] & 0xFF) << 16) | m_CR[1];
+    // Treat bits set in the mask command as acknowledged MPEG interrupts.
+    m_mpegCard.ClearInterruptFlags(static_cast<uint16>(m_mpegInterruptMask & 0xFFFF));
 
-    m_RR[0] = GetStatusCode() << 8u;
-    m_RR[1] = m_mpegCard.PeekInterruptFlags();
-    m_RR[2] = m_mpegInterruptMask;
+    m_RR[0] = (GetStatusCode() << 8u) | ((m_mpegCard.PeekInterruptFlags() >> 8) & 0xFF);
+    m_RR[1] = m_mpegCard.PeekInterruptFlags() & 0xFF;
+    m_RR[2] = m_mpegInterruptMask & 0xFFFF;
     m_RR[3] = 0;
 
     SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+    // erings: after mask change, if pending causes are now unmasked, assert
+    // MPST so the host's interrupt handler picks them up.
+    PumpMPEGInterrupts();
 }
 
 void CDBlock::CmdMpegInit() {
-    devlog::info<grp::cmd>("-> MPEG init");
     m_mpegCard.Reset();
     m_packScan = {};
     m_mpegSystemEndReached = false;
@@ -3682,21 +3788,43 @@ void CDBlock::CmdMpegInit() {
     m_mpegDisplay = 0;
     m_mpegMode = 0;
     m_mpegDecodingMethod = 0;
+    m_mpegMovieMode = 0xFF;
+    m_mpegDecodeTiming = 0;
+    m_mpegScanMode = 0;
+    m_mpegPlayMode = 0;
+    m_mpegAudioMute = 0x04;
+    m_mpegVidPaused = false;
+    m_mpegVidFrozen = false;
     m_mpegAudCon = 0;
     m_mpegAudLay = 0;
     m_mpegAudBufNum = 0xFF;
     m_mpegVidCon = 0;
     m_mpegVidLay = 0;
     m_mpegVidBufNum = 0xFF;
+    m_mpegESProbePending = false;
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
     m_RR[3] = 0;
-    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+    // MpegInit asserts MPED + MPCM (erings: hirqCMOK | hirqMPED | hirqMPCM).
+    // The host-side init polls HIRQ & 0x1800 == 0x1800 to know init is done.
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM);
 }
 
 void CDBlock::CmdMpegSetMode() {
-    devlog::info<grp::cmd>("-> MPEG set mode");
+    devlog::info<grp::cmd>("-> MPEG set mode (CR1={:04X} CR2={:04X} CR3={:04X} CR4={:04X})", m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+    // $94 SetMode byte packing (CDC_MpSetMode):
+    //   CR1 low byte = movie mode (0xFF = keep)
+    //   CR2 high byte = decode timing (0=VSYNC, 1=host-synchronized)
+    //   CR2 low byte = output destination (0=VDP2, 1=host transfer)
+    //   CR3 high byte = scan mode (0/1=NTSC, 2/3=PAL)
+    // 0xFF in any byte means keep the current value (erings mpegSetByte).
+    if (uint8 v = m_CR[0] & 0xFF; v != 0xFF) m_mpegMovieMode = v;
+    if (uint8 v = (m_CR[1] >> 8) & 0xFF; v != 0xFF) {
+        m_mpegDecodeTiming = v;
+        m_mpegCard.SetDecodeTiming(v == 1 ? mpeg::MPEGDecodeTiming::Host : mpeg::MPEGDecodeTiming::VSYNC);
+    }
+    if (uint8 v = m_CR[2] >> 8; v != 0xFF) m_mpegScanMode = v;
     m_mpegMode = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
@@ -3706,9 +3834,17 @@ void CDBlock::CmdMpegSetMode() {
 }
 
 void CDBlock::CmdMpegPlay() {
-    devlog::info<grp::cmd>("-> MPEG play");
+    devlog::info<grp::cmd>("-> MPEG play (CR1={:04X} CR2={:04X} CR3={:04X} CR4={:04X})", m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+    // $95 Play byte packing (CDC_MpPlay):
+    //   CR1 low byte = play mode (0=A/V sync, 1=independent, 0xFF=keep)
+    //   CR2 high byte = audio transfer mode (0=auto, 1=force, 0xFF=keep)
+    //   CR2 low byte = video transfer mode (0=auto, 1=force, 0xFF=keep)
+    //   CR4 low byte = untraced fourth parameter (hosts send 0xFF)
+    if (uint8 v = m_CR[0] & 0xFF; v != 0xFF) {
+        m_mpegPlayMode = v;
+        m_mpegCard.SetPlayMode(v);
+    }
     // Start CD data flow and set MPEGCard to Playing state.
-    // The game will poll MpegGetStatus and see the actual status.
     m_mpegCard.StartPlayback();
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
@@ -3718,8 +3854,33 @@ void CDBlock::CmdMpegPlay() {
 }
 
 void CDBlock::CmdMpegSetDecodingMethod() {
-    devlog::info<grp::cmd>("-> MPEG set decoding method");
+    devlog::info<grp::cmd>("-> MPEG set decoding method (CR1={:04X} CR2={:04X} CR3={:04X} CR4={:04X})", m_CR[0], m_CR[1], m_CR[2], m_CR[3]);
+    // $96 SetDecodeMethod byte packing (CDC_MpSetDec):
+    //   CR1 low byte = audio mute (bit0=right, bit1=left; 0xFF=keep)
+    //   CR2 = pause-time word (0=pause, 1=normal, >1=slow; 0xFFFF=keep)
+    //   CR4 = freeze-time word (0=freeze, 1=normal, >1=strobe; 0xFFFF=keep)
+    if (uint8 v = m_CR[0] & 0xFF; v != 0xFF) m_mpegAudioMute = v;
+    if (m_CR[1] != 0xFFFF) m_mpegVidPaused = (m_CR[1] == 0);
+    if (m_CR[3] != 0xFFFF) m_mpegVidFrozen = (m_CR[3] == 0);
+    m_mpegCard.SetVideoPaused(m_mpegVidPaused);
+    m_mpegCard.SetVideoFrozen(m_mpegVidFrozen);
     m_mpegDecodingMethod = m_CR[1];
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = 0;
+    m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegOutDecodingSync() {
+    // $97 MpegOutDecodingSync: with $94 decode timing 1 (host-synchronized),
+    // each command arms one picture decode step. The pacing loop checks
+    // HasHostDecodeStep() and decodes one frame per pending step. With VSYNC
+    // decode timing the command only returns status (erings cmdMpegOutDecodingSync).
+    devlog::info<grp::cmd>("-> MPEG out decoding sync (timing={}, steps={})", m_mpegDecodeTiming, m_mpegCard.HasHostDecodeStep());
+    if (m_mpegDecodeTiming == 1) {
+        m_mpegCard.RequestHostDecodeStep();
+    }
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
@@ -3758,6 +3919,25 @@ void CDBlock::CmdMpegSetConnection() {
     m_mpegVidCon = m_CR[2] & 0xFF;
     m_mpegVidLay = m_CR[3] >> 8;
     m_mpegVidBufNum = m_CR[3] & 0xFF;
+
+    // If video is connected (vidbufnum != 0xFF) and the decoder is not yet in
+    // raw video ES mode, check the first sector of the connected partition for
+    // a video sequence header (00 00 01 B3). If found, switch the decoder to
+    // ES-only mode (plm_video_t). This is the Vatlva path: the FMV is a raw
+    // video elementary stream, not an MPEG-PS. The check is done here (not in
+    // FeedMPEGStream) because $9A is where the game commits the connection --
+    // the first data sectors arrive via FeedMPEGStream shortly after.
+    //
+    // This is isolated from the Lunar PS path: if the sector starts with
+    // 00 00 01 BA (pack start code), the decoder stays in plm_t PS mode.
+    if (m_mpegVidBufNum != 0xFF && m_mpegAuthStatus == 2 && !m_mpegCard.IsVideoES()) {
+        // Defer ES detection to FeedMPEGStream (first sector arrives there).
+        // We set a flag so FeedMPEGStream knows to probe on the first call.
+        m_mpegESProbePending = true;
+    } else if (m_mpegVidBufNum == 0xFF) {
+        // Video disconnected: cancel any pending ES probe.
+        m_mpegESProbePending = false;
+    }
 
     // If the game requests auto-stop on end-of-stream, the FMV will only
     // be played once. Disable disc repeat up front so the CD block cannot
@@ -3831,6 +4011,24 @@ void CDBlock::CmdMpegGetStream() {
     m_RR[1] = m_mpegStream;
     m_RR[2] = 0;
     m_RR[3] = 0;
+    SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
+}
+
+void CDBlock::CmdMpegGetPictureSize() {
+    // $9F MpegGetPictureSize: returns the decoded picture dimensions.
+    // Until a sequence header sets the real size, report the default for
+    // the configured scan mode (erings cmdMpegGetPictureSize).
+    uint16 w = static_cast<uint16>(m_mpegCard.GetWidth());
+    uint16 h = static_cast<uint16>(m_mpegCard.GetHeight());
+    if (w == 0 || h == 0) {
+        w = 352;
+        h = (m_mpegScanMode >= 2) ? 288 : 240;
+    }
+    devlog::info<grp::cmd>("-> MPEG get picture size ({}x{})", w, h);
+    m_RR[0] = GetStatusCode() << 8u;
+    m_RR[1] = 0;
+    m_RR[2] = w;
+    m_RR[3] = h;
     SetInterrupt(kHIRQ_CMOK | kHIRQ_MPED | kHIRQ_MPCM | kHIRQ_MPST);
 }
 

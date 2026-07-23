@@ -11,8 +11,17 @@
 namespace ymir::mpeg {
 
 struct MPEGVideoDecoder::Impl {
+    // Unified plm_t instance used for MPEG-PS demux+decode (Lunar path).
     plm_buffer_t *buffer = nullptr;
     plm_t *plm = nullptr;
+
+    // Raw video elementary stream decoder (Vatlva path). When non-null,
+    // Append/DecodeFrame operate on this instead of the plm_t pipeline.
+    // The plm_t above is left untouched so the two paths are fully isolated.
+    plm_buffer_t *esBuffer = nullptr;
+    plm_video_t *esVideo = nullptr;
+    bool esEnded = false;
+
     int probeCount = 0;
 
     Impl() {
@@ -24,6 +33,11 @@ struct MPEGVideoDecoder::Impl {
     }
 
     void Destroy() {
+        if (esVideo != nullptr) {
+            plm_video_destroy(esVideo);
+            esVideo = nullptr;
+            esBuffer = nullptr; // destroyed by plm_video_destroy (destroy_when_done=TRUE)
+        }
         if (plm != nullptr) {
             plm_destroy(plm);
             plm = nullptr;
@@ -41,6 +55,28 @@ struct MPEGVideoDecoder::Impl {
         plm_set_video_enabled(plm, TRUE);
         plm_set_audio_enabled(plm, TRUE);
         probeCount = 0;
+        esEnded = false;
+    }
+
+    // Initialize the raw video ES decoder. Called once when FeedMPEGStream
+    // detects the stream starts with 00 00 01 B3 (MPEG video sequence header)
+    // instead of 00 00 01 BA (MPEG-PS pack start code).
+    void InitVideoES() {
+        if (esVideo != nullptr) {
+            return; // already in ES mode
+        }
+        esBuffer = plm_buffer_create_for_appending(64 * 1024);
+        esVideo = plm_video_create_with_buffer(esBuffer, TRUE);
+        esEnded = false;
+    }
+
+    void ResetVideoES() {
+        if (esVideo != nullptr) {
+            plm_video_destroy(esVideo);
+            esVideo = nullptr;
+            esBuffer = nullptr;
+        }
+        esEnded = false;
     }
 };
 
@@ -73,6 +109,14 @@ void MPEGVideoDecoder::Append(std::span<const uint8> data) {
     if (data.empty()) {
         return;
     }
+
+    if (m_impl->esVideo != nullptr) {
+        // Raw video ES mode (Vatlva): feed directly to the video decoder buffer.
+        plm_buffer_write(m_impl->esBuffer, const_cast<uint8 *>(data.data()), data.size());
+        return;
+    }
+
+    // MPEG-PS mode (Lunar): feed to the full plm_t pipeline.
     plm_buffer_write(m_impl->buffer, const_cast<uint8 *>(data.data()), data.size());
 
     // Probe for audio streams if not yet discovered.
@@ -87,38 +131,76 @@ void MPEGVideoDecoder::Append(std::span<const uint8> data) {
     }
 }
 
+void MPEGVideoDecoder::InitVideoES() {
+    assert(m_impl != nullptr);
+    m_impl->InitVideoES();
+}
+
+bool MPEGVideoDecoder::IsVideoES() const {
+    assert(m_impl != nullptr);
+    return m_impl->esVideo != nullptr;
+}
+
+void MPEGVideoDecoder::ResetVideoES() {
+    assert(m_impl != nullptr);
+    m_impl->ResetVideoES();
+}
+
 void MPEGVideoDecoder::SignalEndOfStream() {
     assert(m_impl != nullptr);
+    if (m_impl->esVideo != nullptr) {
+        plm_buffer_signal_end(m_impl->esBuffer);
+        return;
+    }
     plm_buffer_signal_end(m_impl->buffer);
 }
 
 bool MPEGVideoDecoder::HasHeaders() const {
     assert(m_impl != nullptr);
+    if (m_impl->esVideo != nullptr) {
+        return plm_video_has_header(m_impl->esVideo) != FALSE;
+    }
     return plm_has_headers(m_impl->plm) != FALSE;
 }
 
 uint32 MPEGVideoDecoder::GetWidth() const {
     assert(m_impl != nullptr);
+    if (m_impl->esVideo != nullptr) {
+        return std::max(0, plm_video_get_width(m_impl->esVideo));
+    }
     return std::max(0, plm_get_width(m_impl->plm));
 }
 
 uint32 MPEGVideoDecoder::GetHeight() const {
     assert(m_impl != nullptr);
+    if (m_impl->esVideo != nullptr) {
+        return std::max(0, plm_video_get_height(m_impl->esVideo));
+    }
     return std::max(0, plm_get_height(m_impl->plm));
 }
 
 double MPEGVideoDecoder::GetFrameRate() const {
     assert(m_impl != nullptr);
+    if (m_impl->esVideo != nullptr) {
+        return plm_video_get_framerate(m_impl->esVideo);
+    }
     return plm_get_framerate(m_impl->plm);
 }
 
 bool MPEGVideoDecoder::HasAudio() const {
     assert(m_impl != nullptr);
+    // Raw video ES has no audio.
+    if (m_impl->esVideo != nullptr) {
+        return false;
+    }
     return plm_get_num_audio_streams(m_impl->plm) > 0;
 }
 
 uint32 MPEGVideoDecoder::GetAudioSampleRate() const {
     assert(m_impl != nullptr);
+    if (m_impl->esVideo != nullptr) {
+        return 0;
+    }
     if (plm_get_num_audio_streams(m_impl->plm) == 0) {
         return 0;
     }
@@ -130,7 +212,13 @@ uint32 MPEGVideoDecoder::GetAudioSampleRate() const {
 std::optional<DecodedVideoFrame> MPEGVideoDecoder::DecodeFrame() {
     assert(m_impl != nullptr);
 
-    plm_frame_t *plmFrame = plm_decode_video(m_impl->plm);
+    plm_frame_t *plmFrame = nullptr;
+    if (m_impl->esVideo != nullptr) {
+        // Raw video ES decode: one picture per call.
+        plmFrame = plm_video_decode(m_impl->esVideo);
+    } else {
+        plmFrame = plm_decode_video(m_impl->plm);
+    }
     if (plmFrame == nullptr) {
         return std::nullopt;
     }
@@ -148,6 +236,11 @@ std::optional<DecodedVideoFrame> MPEGVideoDecoder::DecodeFrame() {
 
 std::optional<DecodedAudioFrame> MPEGVideoDecoder::DecodeAudio() {
     assert(m_impl != nullptr);
+
+    // Raw video ES has no audio.
+    if (m_impl->esVideo != nullptr) {
+        return std::nullopt;
+    }
 
     plm_samples_t *plmSamples = plm_decode_audio(m_impl->plm);
     if (plmSamples == nullptr) {
@@ -174,6 +267,9 @@ std::optional<DecodedAudioFrame> MPEGVideoDecoder::DecodeAudio() {
 
 bool MPEGVideoDecoder::HasEnded() const {
     assert(m_impl != nullptr);
+    if (m_impl->esVideo != nullptr) {
+        return plm_video_has_ended(m_impl->esVideo) != FALSE;
+    }
     // plm_has_ended covers demux, video, and audio sub-states. After
     // SignalEndOfStream(), the buffer signals end to demux which eventually
     // propagates the has_ended flag here once all buffered frames have been

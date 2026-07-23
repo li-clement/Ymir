@@ -104,6 +104,10 @@ static const std::unordered_map<std::string_view, GameInfo> kGameInfosByCode = {
     {"T-27901G",  {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Lunar - Silver Star Story (Japan)
     {"ST-27901G", {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Lunar - Silver Star Story (Japan) (Demo)
     {"T-27904G",  {.flags = RelaxedVDP2BitmapCPAccessChecks | MovieCard}}, // Lunar - Silver Star Story (Japan) (MPEG version)
+    // VATLVA (Japan) (Rev A) - MPEG path uses raw video ES + host-synchronized
+    // decode ($97). Not yet fully working; game falls back to non-MPEG FMV
+    // when MovieCard is absent, which works correctly.
+    // {"T-31501G",  {.flags = MovieCard}},
     {"GS-9088",   {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Mechanical Violator Hakaider - Last Judgement (Japan)
     {"T-2105G",   {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Shin Kaitei Gunkan - Koutetsu no Kodoku (Japan)
 

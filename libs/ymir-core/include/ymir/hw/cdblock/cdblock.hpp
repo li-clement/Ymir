@@ -53,6 +53,13 @@ public:
     void CloseTray();
     [[nodiscard]] bool IsTrayOpen() const;
 
+    // Called from the pacing loop after MPEG decode to fire any pending
+    // MPEG-card interrupt flags as HIRQ bits. The game (Vatlva) polls for
+    // picture-start interrupts via $91 GetInterrupt, which is driven by
+    // kHIRQ_MPST. Without this call, decoded frames never trigger the
+    // interrupt and the game never advances its decode loop.
+    void PumpMPEGInterrupts();
+
     mpeg::MPEGCard &GetMPEGCard() {
         return m_mpegCard;
     }
@@ -171,12 +178,34 @@ private:
     uint8 m_mpegAuthStatus;
 
     mpeg::MPEGCard m_mpegCard;
-    uint16 m_mpegInterruptMask;
+    uint32 m_mpegInterruptMask = 0; // 24-bit MPEG interrupt cause mask
     uint16 m_mpegConnection;
     uint16 m_mpegStream;
     uint16 m_mpegDisplay;
     uint16 m_mpegMode;
     uint16 m_mpegDecodingMethod;
+
+    // $94 SetMode stored parameters (Vatlva uses decode timing 1 = host-sync).
+    uint8 m_mpegMovieMode = 0xFF;
+    uint8 m_mpegDecodeTiming = 0;   // 0=VSYNC, 1=host-synchronized
+    uint8 m_mpegScanMode = 0;
+
+    // $95 Play stored parameters.
+    uint8 m_mpegPlayMode = 0;       // 0=A/V sync, 1=independent
+
+    // $96 SetDecodeMethod stored parameters.
+    uint8 m_mpegAudioMute = 0x04;
+    bool m_mpegVidPaused = false;
+    bool m_mpegVidFrozen = false;
+
+    // $97 host-synchronized decode step counter (mirrors MPEGCard).
+    // $9F picture size cache (learned from decoded sequence header).
+    // Both are accessed through m_mpegCard getters.
+
+    // Vatlva: flag set by $9A SetConnection when video partition is connected.
+    // FeedMPEGStream probes the first sector for 00 00 01 B3 (raw video ES)
+    // and switches the decoder to ES-only mode if found.
+    bool m_mpegESProbePending = false;
 
     // MPEG connection state (matching Kronos mpegcon_struct)
     uint8 m_mpegAudCon = 0;
@@ -186,7 +215,7 @@ private:
     uint8 m_mpegVidLay = 0;
     uint8 m_mpegVidBufNum = 0xFF;
 
-    bool m_movieCardPresent = true; // MPEG card is always present in HLE
+    bool m_movieCardPresent = false; // set by SetMovieCardPresent when game DB or user enables it
 
     // MPEG-1 Program Stream system-layer parser state (erings mpegPackScan
     // equivalent). Tracks position across FeedMPEGStream calls so a system-
@@ -470,6 +499,8 @@ private:
     void CmdMpegSetMode();           // 0x94
     void CmdMpegPlay();              // 0x95
     void CmdMpegSetDecodingMethod(); // 0x96
+    void CmdMpegOutDecodingSync();  // 0x97
+    void CmdMpegGetPictureSize();   // 0x9F
 
     // MPEG stream
     void CmdMpegSetConnection();     // 0x9A
