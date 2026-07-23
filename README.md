@@ -126,8 +126,9 @@ Ymir includes an HLE (High-Level Emulation) implementation of the Sega Saturn MP
 | Game | Disc ID | Status |
 |------|---------|--------|
 | Lunar: Silver Star Story Complete (Japan) (MPEG version) | T-27904G | Playable — FMV video and audio, Start-skip, multi-FMV playback |
+| Vatlva (Japan) (Rev A) | T-31501G | Playable — raw video ES, host-synchronized decode ($97), single FMV through to title |
 
-> MPEG card support is still in development. Only the game listed above has been tested and confirmed working. Other MPEG-required titles (e.g. Grandia, Road Advenger, True Love Story) may not work correctly yet.
+> MPEG card support is still in development. The two games listed above have been tested and confirmed working. Other MPEG-required titles (e.g. Grandia, Road Advenger, True Love Story) may not work correctly yet.
 
 ## Cheat Engine
 
