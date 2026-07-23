@@ -34,9 +34,10 @@ jobs:
           - name: arm64
             isa_name: arm64
             runner: macos-14
-          - name: x64
-            isa_name: x86_64
-            runner: macos-13
+          # Note: x86_64 (Intel) runner retired by GitHub on 2024-12. macos-13
+          # is no longer provided. The fork targets arm64 (Apple Silicon)
+          # consumers; x64 builds remain on the upstream project's
+          # nightly-release workflow which still uses the maintained runner.
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +64,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/vcpkg_cache
-          key: macos-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          # Hash on the manifest + triple-specific files so an ABI change in
+          # the macOS arm64 baseline invalidates the cache deterministically.
+          key: macos-${{ matrix.arch.name }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            macos-${{ matrix.arch.name }}-vcpkg-
 
       - name: Configure CMake
         env:
