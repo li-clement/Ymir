@@ -21,6 +21,13 @@ void MPEGVideoOverlay::BlitLatestFrame(const MPEGCard &card, std::span<uint32> f
     if (!card.IsDisplayEnabled()) {
         return;
     }
+    // Vatlva leaves the MPEG display latch enabled after natural end and
+    // immediately returns to VDP2 title rendering. Do not retain its last ES
+    // frame over the title area. Lunar's PS path keeps the Ended hand-off
+    // frame because its driver tears the card down explicitly.
+    if (card.IsVideoES() && card.GetStatus() == MPEGCardStatus::Ended) {
+        return;
+    }
     if (card.GetStatus() != MPEGCardStatus::Playing &&
         card.GetStatus() != MPEGCardStatus::Ended) {
         return;

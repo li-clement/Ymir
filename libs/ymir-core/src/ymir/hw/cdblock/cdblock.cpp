@@ -3747,8 +3747,8 @@ void CDBlock::CmdMpegGetInterrupt() {
     //   CR1 low byte = cause bits 23-16 (currently always 0)
     //   CR2 = cause bits 15-0
     const auto flags = m_mpegCard.TakeInterruptFlags();
-    m_RR[0] = (GetStatusCode() << 8u) | ((flags >> 8) & 0xFF);
-    m_RR[1] = flags & 0xFF;
+    m_RR[0] = (GetStatusCode() << 8u) | ((static_cast<uint32>(flags) >> 16) & 0xFF);
+    m_RR[1] = flags;
     m_RR[2] = static_cast<uint16>(m_mpegInterruptMask & 0xFFFF);
     m_RR[3] = 0;
 
@@ -3764,8 +3764,9 @@ void CDBlock::CmdMpegSetInterruptMask() {
     // Treat bits set in the mask command as acknowledged MPEG interrupts.
     m_mpegCard.ClearInterruptFlags(static_cast<uint16>(m_mpegInterruptMask & 0xFFFF));
 
-    m_RR[0] = (GetStatusCode() << 8u) | ((m_mpegCard.PeekInterruptFlags() >> 8) & 0xFF);
-    m_RR[1] = m_mpegCard.PeekInterruptFlags() & 0xFF;
+    m_RR[0] = (GetStatusCode() << 8u) |
+              ((static_cast<uint32>(m_mpegCard.PeekInterruptFlags()) >> 16) & 0xFF);
+    m_RR[1] = m_mpegCard.PeekInterruptFlags();
     m_RR[2] = m_mpegInterruptMask & 0xFFFF;
     m_RR[3] = 0;
 
