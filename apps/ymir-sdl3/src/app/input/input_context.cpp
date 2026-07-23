@@ -1,10 +1,19 @@
 #include "input_context.hpp"
 
 #include "input_utils.hpp"
+#include <ymir/util/dev_log.hpp>
 
 #include <cassert>
 
 namespace app::input {
+
+namespace grp {
+    struct base {
+        static constexpr bool enabled = true;
+        static constexpr devlog::Level level = devlog::level::debug;
+        static constexpr std::string_view name = "Input";
+    };
+} // namespace grp
 
 InputContext::InputContext() {
     m_keyStates.fill(false);
