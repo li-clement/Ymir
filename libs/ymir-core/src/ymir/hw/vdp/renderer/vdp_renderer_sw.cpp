@@ -4191,15 +4191,15 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         for (uint32 x = 0; Color888 &outputColor : framebufferOutput) {
             if (layer0ColorOffsetEnabled[x]) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[scanline_layers[x][0]]];
-                // Construct-then-assign: Apple clang rejects bare designated-init
-                // assignment onto an existing Color888 union lvalue.
-                outputColor = Color888{
-                    .r = kColorOffsetLUT[colorOffset.r][outputColor.r],
-                    .g = kColorOffsetLUT[colorOffset.g][outputColor.g],
-                    .b = kColorOffsetLUT[colorOffset.b][outputColor.b],
-                    .pad = 0,
-                    .msb = 0,
-                };
+                // Compose the offset into a packed u32 then store through the
+                // union's first member. Designated-init (.r/.g/.b/.pad/.msb)
+                // is rejected on this anonymous-bitfield union by some Clang
+                // versions (CI: "field designator (null) does not refer to any
+                // field in type 'Color888'").
+                const uint8 rOff = kColorOffsetLUT[colorOffset.r][outputColor.r];
+                const uint8 gOff = kColorOffsetLUT[colorOffset.g][outputColor.g];
+                const uint8 bOff = kColorOffsetLUT[colorOffset.b][outputColor.b];
+                outputColor.u32 = uint32(rOff) | (uint32(gOff) << 8) | (uint32(bOff) << 16);
             }
             ++x;
         }
@@ -4251,15 +4251,14 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             for (uint32 x = 0; Color888 &mesheColor : meshOut) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[LYR_Sprite]];
                 if (colorOffset.nonZero) {
-                    // Construct-then-assign: Apple clang rejects bare designated-init
-                    // assignment onto an existing Color888 union lvalue.
-                    mesheColor = Color888{
-                        .r = kColorOffsetLUT[colorOffset.r][mesheColor.r],
-                        .g = kColorOffsetLUT[colorOffset.g][mesheColor.g],
-                        .b = kColorOffsetLUT[colorOffset.b][mesheColor.b],
-                        .pad = 0,
-                        .msb = 0,
-                    };
+                    // Pack the lookup result into the union's u32 instead of
+                    // a designated-init list, to keep port compatibility with
+                    // Clang versions that fail to resolve anonymous-bitfield
+                    // designators (see outputColor path above).
+                    const uint8 rOff = kColorOffsetLUT[colorOffset.r][mesheColor.r];
+                    const uint8 gOff = kColorOffsetLUT[colorOffset.g][mesheColor.g];
+                    const uint8 bOff = kColorOffsetLUT[colorOffset.b][mesheColor.b];
+                    mesheColor.u32 = uint32(rOff) | (uint32(gOff) << 8) | (uint32(bOff) << 16);
                 }
                 ++x;
             }
