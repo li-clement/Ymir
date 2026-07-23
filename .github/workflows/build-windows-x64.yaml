@@ -1,6 +1,9 @@
 name: Build Windows x64 (AVX2)
 
 # Fork-local Windows x64 build that produces a ready-to-deliver ZIP artifact.
+# Triggered on every push and pull_request that targets dev -- together
+# with build-macos.yaml this gives cross-platform coverage (macOS arm64 +
+# Windows x64 AVX2) for every merge / PR on this fork.
 # Does not depend on upstream StrikerX3/Ymir's private NuGet feed; uses the
 # official vcpkg binary cache + local files cache instead so the workflow
 # works on this fork without extra secrets.
@@ -19,6 +22,12 @@ on:
       - '**/*.md'
       - 'docs/**'
   workflow_dispatch:
+
+# Cancel in-flight runs for the same ref so a fast follow-up push doesn't
+# pay double CI minutes.
+concurrency:
+  group: build-windows-x64-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

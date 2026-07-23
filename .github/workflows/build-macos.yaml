@@ -1,5 +1,9 @@
 name: Build macOS
 
+# Triggered on every push and pull_request that targets dev -- together
+# with build-windows-x64.yaml this gives cross-platform coverage (macOS
+# arm64 + Windows x64 AVX2) for every merge / PR on this fork.
+
 on:
   push:
     branches:
@@ -14,6 +18,13 @@ on:
       - '**/*.md'
       - 'docs/**'
   workflow_dispatch:
+
+# Cancel in-flight runs for the same ref so a fast follow-up push doesn't
+# pay double CI minutes. Concurrency group is per-ref, so PR builds and
+# the matching push on dev don't fight each other either.
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
