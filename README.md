@@ -43,6 +43,8 @@ Grab the latest release: [stable](https://github.com/StrikerX3/Ymir/releases/lat
 - Full screen mode with VRR support and low input lag
 - Graphics enhancements such as optional deinterlaced/progressive rendering of high resolution modes and transparent mesh polygon rendering
 - Optional low level CD block emulation
+- MPEG card (Movie Card) HLE with MPEG-1 video overlay and MP2 audio mixing
+- Cheat engine with memory search and cheat code management
 - A work-in-progress feature-rich debugger
 
 Ymir runs on Windows 10 or later, macOS 15 (Sequoia) or later, most modern and popular Linux distributions and FreeBSD, and supports x86-64 (Intel, AMD) and ARM CPUs.
@@ -105,6 +107,38 @@ You can override the selection on Settings > IPL.
 Ymir can load game disc images from MAME CHD, BIN+CUE, IMG+CCD, MDF+MDS or ISO files. It does not support injecting .elf files directly at the moment.
 
 When using low level CD block emulation (LLE), Ymir also requires the CD block ROM to be placed in `roms\cdb`.
+
+
+## MPEG Card (Movie Card) Emulation
+
+Ymir includes an HLE (High-Level Emulation) implementation of the Sega Saturn MPEG card (Movie Card), which is required by certain games for FMV playback.
+
+### How it works
+
+- CD sectors matching the MPEG audio/video partition are routed to an integrated MPEG-1 decoder ([pl_mpeg](https://github.com/phoboslab/pl_mpeg))
+- Decoded video frames are overlaid onto the VDP software renderer framebuffer each VBlank
+- Decoded MP2 audio is mixed into the SCSP output stream in real time
+- The MPEG card is automatically enabled for games that require it via the game database
+- All 20 MPEG CDC commands (0x90-0xAF) and GetMpegROM (0xE2) are implemented
+
+### Supported games
+
+| Game | Disc ID | Status |
+|------|---------|--------|
+| Lunar: Silver Star Story Complete (Japan) (MPEG version) | T-27904G | Playable — FMV video and audio, Start-skip, multi-FMV playback |
+
+> MPEG card support is still in development. Only the game listed above has been tested and confirmed working. Other MPEG-required titles (e.g. Grandia, Road Advenger, True Love Story) may not work correctly yet.
+
+## Cheat Engine
+
+Ymir includes a built-in cheat engine that supports:
+
+- **Memory search**: Scan emulator memory for specific values (exact, range, or differential searches) to locate in-game variables
+- **Cheat code management**: Add, edit, enable/disable, and remove cheat codes through the UI
+- **Real-time application**: Cheats are applied each frame during emulation
+- **Import/export**: Share cheat code lists between sessions
+
+Access the cheat engine via the Cheat Manager window in the emulator UI.
 
 
 ## Troubleshooting

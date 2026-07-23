@@ -47,3 +47,7 @@ cmake-build-*/
 # Generated mig files on MacOS
 apps/ymir-sdl3/src/util/mig/a64
 apps/ymir-sdl3/src/util/mig/x64
+
+# macOS mig generated artifacts
+mach_exc.h
+mach_excUser.c
