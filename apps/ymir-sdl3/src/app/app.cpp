@@ -1053,8 +1053,20 @@ void App::RunEmulator() {
     }
 
     m_context.saturn.instance->SCSP.SetSampleCallback(
-        {&m_context.audioSystem,
-         [](sint16 left, sint16 right, void *ctx) { static_cast<AudioSystem *>(ctx)->ReceiveSample(left, right); }});
+        {&m_context,
+         [](sint16 left, sint16 right, void *ctx) {
+             auto *c = static_cast<SharedContext *>(ctx);
+             // Mix Movie Card MPEG audio (bypasses SCSP on real hardware)
+             {
+                 auto &mpeg = c->saturn.instance->CDBlock.GetMPEGCard();
+                 sint16 mpegL, mpegR;
+                 if (mpeg.GetNextAudioSample(mpegL, mpegR)) {
+                     left = static_cast<sint16>(std::clamp<sint32>(left + mpegL, -32768, 32767));
+                     right = static_cast<sint16>(std::clamp<sint32>(right + mpegR, -32768, 32767));
+                 }
+             }
+             c->audioSystem.ReceiveSample(left, right);
+         }});
 
     m_context.saturn.instance->SCSP.SetSendMidiOutputCallback(
         {&m_midiService, [](std::span<uint8> payload, void *ctx) {
@@ -2303,6 +2315,7 @@ void App::RunEmulator() {
                     }
                     ImGui::MenuItem("Backup memory manager", nullptr,
                                     &m_windowManagerService.BackupMemoryManagerWindow().Open);
+                    ImGui::MenuItem("Cheat manager", nullptr, &m_windowManagerService.CheatManagerWindow().Open);
 
                     ImGui::Separator();
 

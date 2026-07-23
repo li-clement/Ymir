@@ -16,6 +16,7 @@ WindowManagerService::WindowManagerService(SharedContext &context, Settings &set
     , m_settings(settings)
     , m_systemStateWindow(m_context)
     , m_bupMgrWindow(m_context)
+    , m_cheatMgrWindow(m_context)
     , m_masterSH2WindowSet(m_context, true)
     , m_slaveSH2WindowSet(m_context, false)
     , m_scuWindowSet(m_context)
@@ -39,6 +40,7 @@ WindowManagerService::WindowManagerService(SharedContext &context, Settings &set
 void WindowManagerService::DrawWindows() {
     m_systemStateWindow.Display();
     m_bupMgrWindow.Display();
+    m_cheatMgrWindow.Display();
 
     m_masterSH2WindowSet.DisplayAll();
     m_slaveSH2WindowSet.DisplayAll();

@@ -679,7 +679,7 @@ FORCE_INLINE static void Parse(toml::node_view<toml::node> &node, const char *na
         size_t outIndex = 0;
         for (size_t i = 0; i < count && outIndex < input::kNumBindsPerInput; i++) {
             if (auto opt = arr->at(i).value<std::string_view>()) {
-                auto &element = value.elements[i];
+                auto &element = value.elements[outIndex];
                 input::TryParse((*opt), element);
                 if (element.type != input::InputElement::Type::None) {
                     ++outIndex;
@@ -1099,6 +1099,7 @@ void Settings::ResetToDefaults() {
 
     cdblock.readSpeedFactor = 2;
     cdblock.useLLE = false;
+    cdblock.movieCardEnabled = false;
     cdblock.overrideROM = false;
     cdblock.romPath = "";
 }
@@ -1122,6 +1123,7 @@ void Settings::BindConfiguration(ymir::core::Configuration &config) {
     audio.threadedSCSP.Observe([&](auto value) { config.audio.threadedSCSP = value; });
 
     cdblock.readSpeedFactor.Observe([&](auto value) { config.cdblock.readSpeedFactor = value; });
+    cdblock.movieCardEnabled.Observe([&](auto value) { config.cdblock.movieCardEnabled = value; });
 }
 
 SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
@@ -1645,12 +1647,17 @@ SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
     if (auto tblCDBlock = data["CDBlock"]) {
         Parse(tblCDBlock, "ReadSpeed", cdblock.readSpeedFactor);
         Parse(tblCDBlock, "UseLLE", cdblock.useLLE);
+        Parse(tblCDBlock, "MovieCardEnabled", cdblock.movieCardEnabled);
         Parse(tblCDBlock, "OverrideROM", cdblock.overrideROM);
         Parse(tblCDBlock, "ROMPath", cdblock.romPath);
         cdblock.romPath = Absolute(ProfilePath::CDBlockROMImages, cdblock.romPath);
     }
 
     this->path = path;
+    
+    // Rebind inputs after loading settings to ensure user-configured binds are applied
+    RebindInputs();
+    
     return SettingsLoadResult::Success();
 }
 
@@ -2039,6 +2046,7 @@ SettingsSaveResult Settings::Save() {
         {"CDBlock", toml::table{{
             {"ReadSpeed", cdblock.readSpeedFactor.Get()},
             {"UseLLE", cdblock.useLLE},
+            {"MovieCardEnabled", cdblock.movieCardEnabled.Get()},
             {"OverrideROM", cdblock.overrideROM},
             {"ROMPath", Proximate(ProfilePath::CDBlockROMImages, cdblock.romPath).native()},
         }}},
@@ -2132,7 +2140,7 @@ void Settings::RebindInputs() {
                         break;
                     }
 
-                    (void)inputContext.MapAction(element, action, map.context);
+                    inputContext.MapAction(element, action, map.context);
                 }
             }
         }
