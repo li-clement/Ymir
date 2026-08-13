@@ -21,7 +21,6 @@ add_executable(ymir-sdl3
     src/app/settings_defaults.hpp
     src/app/shared_context.cpp
     src/app/shared_context.hpp
-    src/app/stb_implementations.cpp
     src/app/toml_implementation.cpp
     src/app/update_checker.cpp
     src/app/update_checker.hpp
@@ -81,6 +80,8 @@ add_executable(ymir-sdl3
     src/app/services/rom_service.hpp
     src/app/services/disc_service.cpp
     src/app/services/disc_service.hpp
+    src/app/services/discord_rpc_service.cpp
+    src/app/services/discord_rpc_service.hpp
     src/app/services/display_service.cpp
     src/app/services/display_service.hpp
     src/app/services/file_dialog_service.cpp
@@ -437,7 +438,6 @@ find_package(OpenSSL CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(rtmidi CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
-find_package(Stb REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
 
 target_include_directories(ymir-sdl3
@@ -445,7 +445,6 @@ target_include_directories(ymir-sdl3
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     PRIVATE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
-        "$<BUILD_INTERFACE:${Stb_INCLUDE_DIR}>"
 )
 target_link_libraries(ymir-sdl3 PRIVATE
     ymir::ymir-core
@@ -458,8 +457,11 @@ target_link_libraries(ymir-sdl3 PRIVATE
     tomlplusplus::tomlplusplus
     cereal::cereal
     lz4::lz4
+    discord-rpc
     RtMidi::rtmidi
     CURL::libcurl_static
+    stb::stb
+    dr_libs::dr_libs
 )
 if (WIN32)
     target_link_libraries(ymir-sdl3 PRIVATE

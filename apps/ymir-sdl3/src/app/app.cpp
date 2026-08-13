@@ -149,6 +149,7 @@ App::App()
     : m_saveStateService(m_context, m_settings)
     , m_midiService(m_context.serviceLocator)
     , m_settings(m_context)
+    , m_discordRPCService(m_context, m_settings)
     , m_mouseCaptureService(m_context, m_settings)
     , m_romService(m_context, m_settings,
                    [this](std::string title, std::function<void()> fnContents) {
@@ -437,6 +438,7 @@ int App::Run(const CommandLineOptions &options) {
 
     // Apply settings
     m_context.saturn.instance->UsePreferredRegion();
+    m_context.saturn.instance->configuration.cdblock.useLLE = settings.cdblock.useLLE;
     m_context.EnqueueEvent(events::emu::LoadInternalBackupMemory());
     EnableRewindBuffer(settings.general.enableRewindBuffer);
     util::BoostCurrentProcessPriority(settings.general.boostProcessPriority);
@@ -546,6 +548,8 @@ void App::RunEmulator() {
 
     m_updateCheckerService.Start(m_context, m_settings, [&] { m_windowManagerService.UpdateWindow().Open = true; });
     ScopeGuard sgStopUpdateCheckerThread{[&] { m_updateCheckerService.Stop(); }};
+
+    ScopeGuard sgStopDiscordRPC{[&] { m_discordRPCService.Stop(); }};
 
     // Get embedded file system
     auto embedfs = cmrc::Ymir_sdl3_rc::get_filesystem();
@@ -3250,6 +3254,7 @@ void App::RunEmulator() {
         settings.CheckDirty();
         m_saveStateService.CheckDebuggerStateDirty();
         m_persistenceService.DoPendingPersistences();
+        m_discordRPCService.Poll();
     }
 
 end_loop:; // the semicolon is not a typo!

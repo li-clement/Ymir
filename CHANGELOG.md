@@ -8,6 +8,7 @@ Introduces save state file version 14.
 
 ### New features and improvements
 
+- App: Added Discord Rich Presence support. (#260, #917; @SternXD)
 - App: Added option to unpause emulator when loading discs. Enabled by default, which changes established behavior.
 - App: Clarified IPL ROM meaning in the Welcome window and IPL settings tab -- it refers to the BIOS.
 - App: Display volume indicator on the top-right corner of the window for a few seconds after adjustments.
@@ -22,6 +23,7 @@ Introduces save state file version 14.
 - Input: Convert 3D Control Pad analog stick to D-Pad inputs when in digital mode.
 - Input: Graduate Virtua Gun to stable feature.
 - Input: Introduce a small amount of jitter to the Virtua Gun aim in Death Crimson. Greatly improves shot detection in the game. (#787)
+- Media: Added support for MP3 and OGG audio tracks to CUE loader. (#920; @surajrbhardwaj)
 - SH2: Interrupt recalculation microoptimizations.
 - SMPC: Remove direct dependency to filesystem API for data persistence.
 - VDP1: Software renderer performance microoptimizations:
@@ -33,7 +35,9 @@ Introduces save state file version 14.
 ### Fixes
 
 - Backup RAM: Fix crash when attempting to load a backup RAM cartridge with the default path.
+- CD Block (HLE): Report current CD status and raise CMOK HIRQ signal when processing unimplemented commands.
 - CD Block (HLE): Read reset position flag correctly from parameters.
+- CD Block (LLE): Fix audio track playback failing for tracks 16 and higher. Fixes Virtual On - Cyber Troopers credits and the songs in certain arenas.
 - GameDB: Disable a number of game-specific hacks that are no longer required:
     - Chisato Moritaka - Watarase Bashi & Lala Sunshine: no longer crashes at startup. (#604)
     - Deep Fear: no longer freezes after the "April Fools!" voice line. (#740)
@@ -51,10 +55,13 @@ Introduces save state file version 14.
     - Black/Matrix (#861)
 - Media: Don't read the Path Table past the size specified in the Volume Descriptor. Fixes CD Block HLE not able to read disc images made with some lazy patches that don't properly clean up the Path Table. (#912)
 - Media (CUE): Don't accumulate pre/postgaps multiple times per track. Fixes some audio track offset issues for single-BIN dumps. (#146)
+- Media (CUE): Properly compute track count on discs with sparse track numbers. Fixes audio playabck on some homebrew discs that omit tracks (e.g. The Rockin'-B All Stars version 06/03/23 skips track 2).
 - Media (CUE): Use CUE sheet timestamps to compute track lengths. Fixes some audio track offset issues for single-BIN dumps. (#146)
+- SCU: Allow 8-bit writes to DSP registers.
+- Settings: Apply CD Block LLE configuration at startup. Fixes Ymir always launching with CD Block HLE mode when LLE was enabled in the settings file.
 - SMPC: Update peripheral PDR1/2 registers when reading and when updating EXLE. Fixes many cases of games not recognizing Virtua Gun inputs or missing shots. (#787)
 - VDP1: Don't sync VDP1 FBRAM on debug reads. Fixes deadlock when viewing the framebuffer area in a memory viewer window.
-- VDP1: Ignore 8-bit setting and force-align to 16-bit addresses when writing pixels with MSB enabled. Fixes deselected menu options being fully painted in black in Derby Analyst. (#587)
+- VDP1: Force-align MSB write to 16-bit addresses when writing pixels with MSB enabled. Fixes deselected menu options being fully painted in black in Derby Analyst. (#587)
 - VDP1: Textured sprites with CMDSIZE.H=0 never fetch additional texels. Fixes glitched graphics in the scorecard of the shooting range in Policenauts.
 - VDP2: Avoid unintentional side effects on VDP2 EXTEN register when saving states. Fixes camera angles in Digital Dance Mix Vol. 1 - Namie Amuro.
 - VDP2: Fix coordinate latching on external latches. Fixes various Virtua Gun shot offset errors. (#787)
