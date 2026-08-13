@@ -13,6 +13,8 @@
 
 #include <util/file_loader.hpp>
 
+#include <algorithm>
+
 #include <fmt/format.h>
 
 #include <fstream>
@@ -62,6 +64,15 @@ EmuEvent SetTransparentMeshes(bool enable) {
     return RunFunction([=](SharedContext &ctx) {
         ctx.saturn.instance->VDP.ModifyEnhancements(
             [&](vdp::config::Enhancements &enhancements) { enhancements.transparentMeshes = enable; });
+    });
+}
+
+EmuEvent SetInternalResolutionScale(uint32 scale) {
+    return RunFunction([=](SharedContext &ctx) {
+        ctx.saturn.instance->VDP.ModifyEnhancements(
+            [&](vdp::config::Enhancements &enhancements) {
+                enhancements.internalResolutionScale = std::clamp(scale, 1u, 4u);
+            });
     });
 }
 

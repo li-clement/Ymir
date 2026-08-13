@@ -226,6 +226,31 @@ namespace settings::video {
                 ctx.displayScale);
         }
 
+        void InternalResolutionScale(SharedContext &ctx) {
+            auto &settings = ctx.serviceLocator.GetRequired<Settings>();
+            auto &videoSettings = settings.video;
+            int scale = (int)videoSettings.enhancements.internalResolutionScale.Get();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Internal resolution scale:");
+            widgets::ExplanationTooltip(
+                "Renders the VDP2 output at a multiple of the native resolution, then scales it to the window.\n"
+                "Higher values produce a smoother, less pixelated image at the cost of GPU/CPU performance.\n"
+                "1x = native Saturn resolution (320x240 typically).\n"
+                "2x/3x/4x = internal framebuffer is 2/3/4 times larger on each axis; final window scaling still applies.\n"
+                "\n"
+                "Note: changes take effect on the next VDP2 resolution change (e.g. when the game switches display "
+                "modes).",
+                ctx.displayScale);
+            ImGui::SameLine();
+            ImGui::PushID("##internal_resolution_scale");
+            int newScale = scale;
+            if (settings.MakeDirty(ImGui::SliderInt("##irs", &newScale, 1, 4, "%dx", ImGuiSliderFlags_AlwaysClamp))) {
+                newScale = std::max(1, std::min(newScale, 4));
+                videoSettings.enhancements.internalResolutionScale = (uint32)newScale;
+            }
+            ImGui::PopID();
+        }
+
     } // namespace enhancements
 
 } // namespace settings::video

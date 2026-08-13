@@ -318,6 +318,8 @@ int App::Run(const CommandLineOptions &options) {
             [&](bool value) { m_context.EnqueueEvent(events::emu::SetDeinterlace(value)); });
         videoSettings.enhancements.transparentMeshes.Observe(
             [&](bool value) { m_context.EnqueueEvent(events::emu::SetTransparentMeshes(value)); });
+        videoSettings.enhancements.internalResolutionScale.ObserveAndNotify(
+            [&](uint32 value) { m_context.EnqueueEvent(events::emu::SetInternalResolutionScale(value)); });
     }
 
     // Profile priority:
@@ -802,10 +804,12 @@ void App::RunEmulator() {
     // nearest interpolation with an integer scale, then rendering the display texture onto the screen with linear
     // interpolation.
 
-    // Software framebuffer texture
+    // Software framebuffer texture - sized to support internal resolution upscaling
+    constexpr uint32 kFbMaxScale = SharedContext::Screen::kMaxInternalScale;
     const gfx::TextureHandle swFbTexture =
-        m_graphicsService.CreateTexture(SDL_PIXELFORMAT_XBGR8888, SDL_TEXTUREACCESS_STREAMING, vdp::kMaxResH,
-                                        vdp::kMaxResV, [&](SDL_Texture *tex, bool recreated) {
+        m_graphicsService.CreateTexture(SDL_PIXELFORMAT_XBGR8888, SDL_TEXTUREACCESS_STREAMING,
+                                        vdp::kMaxResH * kFbMaxScale,
+                                        vdp::kMaxResV * kFbMaxScale, [&](SDL_Texture *tex, bool recreated) {
                                             SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
                                             if (recreated) {
                                                 screen.CopyFramebufferToTexture(tex);
@@ -843,11 +847,15 @@ void App::RunEmulator() {
         assert(m_graphicsService.IsTextureHandleValid(swFbTexture));
         assert(renderer != nullptr);
 
-        // Recreate render target texture if scale changed
-        if (scale != screen.fbScale) {
+        // Recreate render target texture if scale changed (or screen resolution changed)
+        // screen.width/height already reflects the internal resolution scale (m_internalScale applied)
+        const uint32 desiredW = screen.width * screen.fbScale;
+        const uint32 desiredH = screen.height * screen.fbScale;
+        if (scale != screen.fbScale || desiredW != screen.dispTextureWidth || desiredH != screen.dispTextureHeight) {
             screen.fbScale = scale;
-            if (!m_graphicsService.ResizeTexture(dispTexture, vdp::kMaxResH * screen.fbScale,
-                                                 vdp::kMaxResV * screen.fbScale)) {
+            screen.dispTextureWidth = desiredW;
+            screen.dispTextureHeight = desiredH;
+            if (!m_graphicsService.ResizeTexture(dispTexture, desiredW, desiredH)) {
                 devlog::warn<grp::base>("Failed to resize framebuffer texture: {}", SDL_GetError());
             }
         }

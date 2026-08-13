@@ -175,6 +175,7 @@ private:
 
     uint32 m_HRes;
     uint32 m_VRes;
+    uint32 m_internalScale = 1; // Internal resolution scale factor (1=native, 2=2x, etc.)
     bool m_exclusiveMonitor;
     bool m_resolutionChanged = false;
 
@@ -938,7 +939,9 @@ private:
     std::array<ComposeLineBuffers, 2> m_composeLineBuffers;
 
     // Current display framebuffer.
-    std::array<uint32, kMaxResH * kMaxResV> m_framebuffer;
+    // Framebuffer - allocated at max scale (4x) to support internal resolution upscaling
+    static constexpr uint32 kMaxInternalScale = 4;
+    std::array<uint32, kMaxResH * kMaxInternalScale * kMaxResV * kMaxInternalScale> m_framebuffer;
 
     const mpeg::MPEGCard *m_mpegCard = nullptr;
 

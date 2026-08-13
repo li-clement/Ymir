@@ -1078,6 +1078,7 @@ void Settings::ResetToDefaults() {
     video.swRenderer.threadedDeinterlacer = true;
     video.enhancements.deinterlace = false;
     video.enhancements.transparentMeshes = false;
+    video.enhancements.internalResolutionScale = 2;
 
     audio.volume = 0.8;
     audio.mute = false;
@@ -1599,6 +1600,7 @@ SettingsLoadResult Settings::Load(const std::filesystem::path &path) {
             if (auto tblEnhancements = tblVideo["Enhancements"]) {
                 Parse(tblEnhancements, "Deinterlace", video.enhancements.deinterlace);
                 Parse(tblEnhancements, "TransparentMeshes", video.enhancements.transparentMeshes);
+                Parse(tblEnhancements, "InternalResolutionScale", video.enhancements.internalResolutionScale, 2u, 1u, 4u);
             }
         } else {
             Parse(tblVideo, "Deinterlace", video.enhancements.deinterlace);
@@ -2016,6 +2018,7 @@ SettingsSaveResult Settings::Save() {
             {"Enhancements", toml::table{{
                 {"Deinterlace", video.enhancements.deinterlace.Get()},
                 {"TransparentMeshes", video.enhancements.transparentMeshes.Get()},
+                {"InternalResolutionScale", video.enhancements.internalResolutionScale.Get()},
             }}},
         }}},
 

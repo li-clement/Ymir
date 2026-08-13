@@ -26,6 +26,7 @@ namespace settings::video {
 
         void Deinterlace(SharedContext &ctx);
         void TransparentMeshes(SharedContext &ctx);
+        void InternalResolutionScale(SharedContext &ctx);
 
     } // namespace enhancements
 
