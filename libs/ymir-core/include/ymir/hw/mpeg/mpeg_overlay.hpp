@@ -15,7 +15,8 @@ class MPEGVideoOverlay {
 public:
     // Blits the latest frame from the given MPEGCard instance.
     // The caller must ensure the card lifetime exceeds the call.
-    void BlitLatestFrame(const MPEGCard &card, std::span<uint32> framebuffer, uint32 fbWidth, uint32 fbHeight);
+    void BlitLatestFrame(const MPEGCard &card, std::span<uint32> framebuffer, uint32 fbWidth, uint32 fbHeight,
+                         uint32 internalScale = 1);
 };
 
 } // namespace ymir::mpeg

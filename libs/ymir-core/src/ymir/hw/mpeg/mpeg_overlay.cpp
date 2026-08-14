@@ -6,7 +6,7 @@
 namespace ymir::mpeg {
 
 void MPEGVideoOverlay::BlitLatestFrame(const MPEGCard &card, std::span<uint32> framebuffer, uint32 fbWidth,
-                                       uint32 fbHeight) {
+                                       uint32 fbHeight, uint32 internalScale) {
     // Keep displaying the last decoded frame while the card is Playing or
     // has naturally Ended (user pressed Start, or stream reached EOF).
     // The frame persists as a backdrop during the hand-off until the game
@@ -43,16 +43,21 @@ void MPEGVideoOverlay::BlitLatestFrame(const MPEGCard &card, std::span<uint32> f
         return;
     }
 
-    const uint32 copyW = std::min<uint32>(frame.width, fbWidth);
-    const uint32 copyH = std::min<uint32>(frame.height, fbHeight);
+    internalScale = std::max(internalScale, 1u);
+    const uint32 copyW = std::min<uint32>(frame.width, fbWidth / internalScale);
+    const uint32 copyH = std::min<uint32>(frame.height, fbHeight / internalScale);
     if (copyW == 0 || copyH == 0) {
         return;
     }
 
     for (uint32 y = 0; y < copyH; ++y) {
         const uint32 *srcRow = frame.pixelsXBGR8888.data() + static_cast<size_t>(y) * frame.width;
-        uint32 *dstRow = framebuffer.data() + static_cast<size_t>(y) * fbWidth;
-        std::copy_n(srcRow, copyW, dstRow);
+        for (uint32 scaleY = 0; scaleY < internalScale; ++scaleY) {
+            uint32 *dstRow = framebuffer.data() + static_cast<size_t>(y * internalScale + scaleY) * fbWidth;
+            for (uint32 x = 0; x < copyW; ++x) {
+                std::fill_n(dstRow + x * internalScale, internalScale, srcRow[x]);
+            }
+        }
     }
     (void)fbHeight;
 }

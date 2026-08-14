@@ -54,6 +54,36 @@ TEST_CASE("MPEG video overlay does nothing when no frame is decoded", "[mpeg][mo
     CHECK(fb[0] == 0xFF112233u);
 }
 
+TEST_CASE("MPEG video overlay scales frames to the internal framebuffer resolution", "[mpeg][movie-card][overlay]") {
+    mpeg::MPEGCard card;
+    card.Initialize();
+    card.AppendStreamData(kTinyMpegProgramStream);
+    card.SignalEndOfStream();
+    card.StartPlayback();
+    card.SetDisplayEnabled(true);
+    REQUIRE(card.DecodeNextFrame());
+
+    constexpr uint32 kScale = 2;
+    constexpr uint32 kFrameSize = 16;
+    std::array<uint32, kFrameSize * kScale * kFrameSize * kScale> fb{};
+    fb.fill(0xFF112233u);
+
+    mpeg::MPEGVideoOverlay overlay;
+    overlay.BlitLatestFrame(card, std::span<uint32>{fb.data(), fb.size()}, kFrameSize * kScale, kFrameSize * kScale,
+                            kScale);
+
+    const auto &frame = card.GetCurrentFrame();
+    for (uint32 y = 0; y < kFrameSize; ++y) {
+        for (uint32 x = 0; x < kFrameSize; ++x) {
+            const uint32 pixel = frame.pixelsXBGR8888[y * kFrameSize + x];
+            CHECK(fb[(y * kScale) * kFrameSize * kScale + x * kScale] == pixel);
+            CHECK(fb[(y * kScale) * kFrameSize * kScale + x * kScale + 1] == pixel);
+            CHECK(fb[(y * kScale + 1) * kFrameSize * kScale + x * kScale] == pixel);
+            CHECK(fb[(y * kScale + 1) * kFrameSize * kScale + x * kScale + 1] == pixel);
+        }
+    }
+}
+
 TEST_CASE("MPEG video overlay does not blit when display is disabled",
           "[mpeg][movie-card][overlay]") {
     mpeg::MPEGCard card;
