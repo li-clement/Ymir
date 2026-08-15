@@ -113,6 +113,11 @@ public:
     [[nodiscard]] bool HasCurrentFrame() const;
     [[nodiscard]] const DecodedVideoFrame &GetCurrentFrame() const;
 
+    // Test-only helper: inject a synthetic frame so overlay tests can verify
+    // window placement without having to drive pl_mpeg through a full decode
+    // cycle. Not part of the production surface (do not use outside tests).
+    void SetCurrentFrameForTest(DecodedVideoFrame frame) { m_currentFrame = std::move(frame); }
+
     [[nodiscard]] bool HasCurrentAudio() const;
     [[nodiscard]] const DecodedAudioFrame &GetCurrentAudio() const;
 

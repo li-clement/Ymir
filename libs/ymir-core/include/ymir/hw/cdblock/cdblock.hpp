@@ -68,6 +68,20 @@ public:
         return m_mpegCard;
     }
 
+    // $A1 MpegSetWindow latched values. Used by the software VDP renderer
+    // to composite the Movie Card frame buffer onto the VDP2 framebuffer
+    // at the configured position/size/ratio. dispSizeW==0 && dispSizeH==0
+    // means the window was never configured: the overlay falls back to a
+    // 1:1 full-frame blit (Lunar / Vatlva path).
+    sint16 GetMpegWindowFbPosX() const { return m_mpegWindow.fbPosX; }
+    sint16 GetMpegWindowFbPosY() const { return m_mpegWindow.fbPosY; }
+    uint16 GetMpegWindowFbRatioX() const { return m_mpegWindow.fbRatioX; }
+    uint16 GetMpegWindowFbRatioY() const { return m_mpegWindow.fbRatioY; }
+    sint16 GetMpegWindowDispPosX() const { return m_mpegWindow.dispPosX; }
+    sint16 GetMpegWindowDispPosY() const { return m_mpegWindow.dispPosY; }
+    uint16 GetMpegWindowDispSizeW() const { return m_mpegWindow.dispSizeW; }
+    uint16 GetMpegWindowDispSizeH() const { return m_mpegWindow.dispSizeH; }
+
     void SetMovieCardPresent(bool present) {
         m_movieCardPresent = present;
         // On a real Hi-Saturn, the CD Block starts with the MPEG card already
@@ -214,6 +228,37 @@ private:
     uint8 m_mpegVidCon = 0;
     uint8 m_mpegVidLay = 0;
     uint8 m_mpegVidBufNum = 0xFF;
+
+    // $A1 MpegSetWindow sub-parameter selectors:
+    //   sub 0 = frame-buffer position (X<<16 | Y)
+    //   sub 1 = frame-buffer ratio (X<<16 | Y, raw wire values)
+    //   sub 2 = display position (X<<16 | Y, decoder raster coordinates)
+    //   sub 3 = display size (W<<16 | H, visible extent, exclusive)
+    //
+    // Moon Cradle programs these on every FMV to scale and position the
+    // Movie Card frame buffer inside the VDP2 screen. dispSize==0 means
+    // the window was never configured: the overlay falls back to a 1:1
+    // full-frame blit (Lunar / Vatlva path).
+    struct MPEGWindow {
+        sint16 fbPosX = 0;
+        sint16 fbPosY = 0;
+        uint16 fbRatioX = 0;
+        uint16 fbRatioY = 0;
+        sint16 dispPosX = 0;
+        sint16 dispPosY = 0;
+        uint16 dispSizeW = 0;
+        uint16 dispSizeH = 0;
+    } m_mpegWindow;
+
+    // $A2 MpegSetBorderColor, $A3 MpegSetFade, $A4 MpegSetVideoEffects
+    // stored for completeness. The current overlay does not render any of
+    // these (real EXBG hardware composites the Movie Card frame buffer on
+    // top of VDP2 with the configured border/fade/effect), but games
+    // program them on every FMV so we must at least latch the values to
+    // keep the trace-shaped response.
+    uint16 m_mpegBorderColor = 0;
+    uint16 m_mpegFade = 0;
+    uint16 m_mpegVideoEffect = 0;
 
     bool m_movieCardPresent = false; // set by SetMovieCardPresent when game DB or user enables it
 

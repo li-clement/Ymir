@@ -574,7 +574,7 @@ void SoftwareVDPRenderer::DrawMPEGVideoOverlay() {
     const uint32 outW = m_HRes * m_internalScale;
     const uint32 outH = m_VRes * m_internalScale;
     overlay.BlitLatestFrame(*m_mpegCard, std::span<uint32>{m_framebuffer.data(), static_cast<size_t>(outW) * outH},
-                            outW, outH, m_internalScale);
+                            outW, outH, m_internalScale, &m_mpegWindow);
 }
 
 // -----------------------------------------------------------------------------
