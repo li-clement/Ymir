@@ -112,12 +112,12 @@ TEST_CASE("CD Block MPEG commands expose a minimal authenticated Movie Card", "[
     CHECK((h.RR(2) & 0x00FF) != 0x0000);
 
     h.RunCommand(0x9300); // MPEG init
-    // MpegGetStatus returns 0xFF (card removed) in CR1 to bypass MPEG polling
-    // loops for game compatibility (Pitfall #1).
+    // An authenticated idle card reports stopped video/audio decoders in the
+    // low byte; the high byte is the present-card status.
     CHECK((h.HIRQ() & cdblock::kHIRQ_MPED) != 0);
 
-    h.RunCommand(0x9000); // MPEG get status - returns 0xFF00 (card removed)
-    CHECK(h.RR(0) == 0xFF00);
+    h.RunCommand(0x9000); // MPEG get status - present card, stopped decoders
+    CHECK(h.RR(0) == 0x0011);
 }
 
 TEST_CASE("CD Block MPEG stream commands feed Movie Card decoder", "[mpeg][movie-card][cdblock]") {
