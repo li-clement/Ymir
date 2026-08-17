@@ -4,6 +4,14 @@
 
 A work-in-progress Sega Saturn emulator.
 
+## About This Fork
+
+This fork is based on the original [Ymir](https://github.com/StrikerX3/Ymir) project and adds the following features:
+
+- MPEG card (Movie Card) emulation
+- Built-in cheat support
+- Internal resolution scaling
+
 Join the [Discord community](https://discord.gg/NN3A7n5dzn).
 
 Find the official compatibility list [here](https://docs.google.com/spreadsheets/d/1SLZzL9LelSlpEmTKy8cjaQnE7mew2uW1rfCgcekO58Q/edit?usp=sharing).
