@@ -3673,7 +3673,9 @@ void CDBlock::CmdMpegGetStatus() {
     //          Track 2 FAD range, never advancing to Track 1 / title.
     //   0x09 = MPEG error.
     const bool mpegReady = (m_mpegAuthStatus == 2);
-    uint8 statusCode = mpegReady ? 0x00 : 0xFF;
+    // The compatibility status byte remains 0xFF while the MPEG subsystem is
+    // idle; active decoding reports a present card.
+    uint8 statusCode = (mpegReady && mpegStatus == mpeg::MPEGCardStatus::Playing) ? 0x00 : 0xFF;
     uint16 rr3 = 0;
     // MPEG operation-status byte (RR0 low byte, per erings mpegStatusReturn):
     //   bits 0-2 = video decoder state (1=Stopped, 4=Playing)
@@ -3681,7 +3683,7 @@ void CDBlock::CmdMpegGetStatus() {
     // The bit pattern 0x11 (vid=Stopped, aud=Stopped) is the "decoder
     // reports idle" signal Lunar watches to leave its MPEG poll loop
     // and proceed to Track 1 / title.
-    uint8 opStatus = 0x11;  // assume both decoders stopped
+    uint8 opStatus = (mpegStatus == mpeg::MPEGCardStatus::Playing) ? 0x44 : 0x00;
     if (mpegReady) {
         if (mpegStatus == mpeg::MPEGCardStatus::Playing &&
             (m_mpegAudBufNum != 0xFF || m_mpegVidBufNum != 0xFF)) {
@@ -3699,11 +3701,9 @@ void CDBlock::CmdMpegGetStatus() {
     } else {
         switch (mpegStatus) {
         case mpeg::MPEGCardStatus::Stopped:
-            // Card is present and idle. RR3 stays 0 -- the game may now
-            // safely issue MpegInit/MpegPlay/MpegSetConnection to start a
-            // new sequence (or move on to Track 1 data, which Lunar does
-            // after the FMV).
-            opStatus = 0x11;
+            // Keep the compatibility idle response at 0xFF00 until playback
+            // begins; RR3 stays clear for a new MPEG command sequence.
+            opStatus = 0x00;
             break;
         case mpeg::MPEGCardStatus::Playing:
             rr3 |= 0x0001;  // video playing
@@ -3721,10 +3721,10 @@ void CDBlock::CmdMpegGetStatus() {
             if (m_mpegAudBufNum == 0xFF && m_mpegVidBufNum == 0xFF) {
                 // Both partitions released: the layer can no longer
                 // produce output, so the decoder is effectively stopped.
-                opStatus = 0x11;
+                opStatus = 0x00;
             } else {
                 rr3 |= 0x0002;  // video ended, partitions still bound
-                opStatus = 0x11;  // video stopped, but ended just happened
+                opStatus = 0x00;
             }
             break;
         case mpeg::MPEGCardStatus::Error:

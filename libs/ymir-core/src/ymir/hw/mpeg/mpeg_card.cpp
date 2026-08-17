@@ -12,12 +12,9 @@ MPEGCard &MPEGCard::operator=(MPEGCard &&) noexcept = default;
 
 void MPEGCard::Reset() {
     m_decoder.Reset();
-    // NOTE: do NOT clear m_currentFrame here. The VDP2 overlay may need to
-    // keep showing the last decoded frame after a user-initiated FMV exit
-    // (Lunar Start-during-FMV) so the screen doesn't go black before the
-    // title screen takes over. MpegInit() / MpegPlay() will overwrite the
-    // frame when the next FMV starts.
-    // m_currentFrame.reset();
+    // Reset is a full card reset. The overlay must stop presenting stale
+    // decoded data until the next playback pipeline publishes a frame.
+    m_currentFrame.reset();
     m_currentAudio.reset();
     m_audioSampleIndex = 0;
     m_status = MPEGCardStatus::Stopped;
@@ -54,9 +51,10 @@ void MPEGCard::StartPlayback() {
     if (m_status == MPEGCardStatus::Error) {
         return;
     }
-    // Fresh pipeline when not already mid-play. Re-Play while Playing keeps
-    // the current decoder (host re-issue); Stopped/Ended always reopen.
-    if (m_status != MPEGCardStatus::Playing) {
+    // Fresh pipeline when stopped. Re-Play while Playing or after input EOF
+    // keeps already-buffered frames available for decoding; the next appended
+    // stream after EOF opens a fresh pipeline in AppendStreamData().
+    if (m_status == MPEGCardStatus::Stopped) {
         OpenNewPlaybackPipeline();
     }
     m_status = MPEGCardStatus::Playing;

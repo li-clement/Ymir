@@ -16,7 +16,9 @@ using namespace ymir::test::mpeg_fixtures;
 
 namespace {
 
-// Build a single-track mode-1 disc image padded to a multiple of 2048 bytes.
+// Build a single-track mode-1 disc image from 2048-byte user-data sectors.
+// Track::ReadSector expects a complete raw sector-sized unit and synthesizes
+// the missing mode-1 headers/ECC when the track is declared as 2048 bytes.
 std::vector<uint8> BuildMode1DiscImage(std::span<const uint8> payload) {
     constexpr uint32 kSectorSize = 2048;
     const uint32 sectorCount = (payload.size() + kSectorSize - 1) / kSectorSize;
@@ -133,9 +135,9 @@ TEST_CASE("CD Block MPEG stream commands feed Movie Card decoder", "[mpeg][movie
     CHECK(h.cdb.GetMPEGCard().GetCurrentFrame().height == 16);
 
     h.RunCommand(0x9100); // MPEG get interrupt
-    CHECK((h.RR(1) & 0x0001) != 0);
+    CHECK((h.RR(1) & mpeg::kMPEGCardInterruptFrameDecoded) != 0);
 
-    h.RunCommand(0x9200, 0x0001); // clear frame decoded interrupt through mask command MVP
+    h.RunCommand(0x9200, mpeg::kMPEGCardInterruptFrameDecoded);
     h.RunCommand(0x9100);
     CHECK((h.RR(1) & 0x0001) == 0);
 }
@@ -154,7 +156,7 @@ TEST_CASE("CD Block playback streams filtered data sectors into the Movie Card",
     h.RunCommand(0x3000, 0x0000, 0x0000, 0x0000); // CD device -> filter 0 -> partition 0
     h.RunCommand(0x3100);
     CHECK((h.RR(2) >> 8u) == 0x00);
-    CHECK(h.cdb.GetMPEGCard().GetStatus() == mpeg::MPEGCardStatus::Stopped);
+    CHECK(h.cdb.GetMPEGCard().GetStatus() == mpeg::MPEGCardStatus::Playing);
     h.RunCommand(0x1080, 150, 0x0080, 10); // play enough FADs to leave seek state and read sector 150
 
     // First drive tick starts the seek. Subsequent ticks finish seek and read sectors.

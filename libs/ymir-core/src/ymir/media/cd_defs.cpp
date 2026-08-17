@@ -119,10 +119,10 @@ const TrackInfo *TOC::GetTrackInfoForFAD(uint32 frameAddress) const {
     const auto begin = m_trackInfos.cbegin();
     const auto first = begin + m_firstTrackIndex;
     const auto last = begin + m_lastTrackIndex + 1;
-    const auto pos =
-        std::upper_bound(first, last, frameAddress, [](uint32 lhsFrameAddress, const TrackInfo &rhsInfo) -> bool {
-            return lhsFrameAddress < rhsInfo.endFrameAddress;
-        });
+    const auto pos = std::lower_bound(first, last, frameAddress,
+                                      [](const TrackInfo &info, uint32 rhsFrameAddress) -> bool {
+                                          return info.endFrameAddress < rhsFrameAddress;
+                                      });
     if (pos != last && frameAddress >= pos->startFrameAddress) {
         return &*pos;
     }
