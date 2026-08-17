@@ -323,6 +323,7 @@ void AboutWindow::DrawAboutTab() {
         std::unique_lock lock{m_context.locks.renderer};
         ImGui::Text("Using %s VDP1/VDP2 renderer.", vdp.GetRenderer().GetName().data());
     }
+    ImGui::TextUnformatted("Supports MPEG Movie Card and internal-resolution upscaling.");
 
     const char *audioDriver = SDL_GetCurrentAudioDriver();
     ImGui::Text("Using %s audio driver.", AudioDriverToHumanReadableString(audioDriver));

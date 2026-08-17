@@ -15,6 +15,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <numbers>
 #include <span>
@@ -104,7 +105,14 @@ void DisplayService::ReloadStyle(float displayScale) {
     style.DisplayWindowPadding = ImVec2(21, 21);
     style.DisplaySafeAreaPadding = ImVec2(3, 3);
     style.ScaleAllSizes(displayScale);
-    style.FontScaleMain = displayScale;
+    // Use a sub-linear font scaling curve so menu/UI text does not become oversized
+    // on HiDPI displays (where displayScale is typically 2.0). pow() with a small
+    // exponent (0.2) keeps text size close to 1.0 across all DPI scales while
+    // giving a very slight bump on higher densities to match scaled spacing.
+    //   1.0x -> 1.000
+    //   1.5x -> 1.084
+    //   2.0x -> 1.149
+    style.FontScaleMain = std::pow(displayScale, 0.2f);
 
     // Setup Dear ImGui colors
     ImVec4 *colors = style.Colors;

@@ -509,6 +509,8 @@ struct Settings {
         struct Enhancements {
             util::Observable<bool> deinterlace;
             util::Observable<bool> transparentMeshes;
+            // Internal resolution scale factor (1 = native, 2 = 2x, 3 = 3x, 4 = 4x)
+            util::Observable<uint32> internalResolutionScale;
         } enhancements;
     } video;
 
@@ -557,6 +559,7 @@ struct Settings {
     struct CDBlock {
         util::Observable<uint8> readSpeedFactor;
         bool useLLE;
+        util::Observable<bool> movieCardEnabled;
 
         bool overrideROM;
         std::filesystem::path romPath;

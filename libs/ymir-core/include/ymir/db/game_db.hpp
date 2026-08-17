@@ -52,6 +52,8 @@ struct GameInfo {
         RelaxedVDP2BitmapCPAccessChecks = BIT(8), ///< Allow bitmap CP accesses during SH2 cycles
         SkipEmptyVDP1Table = BIT(9),              ///< Skip VDP1 command processing if the top of the table is empty
         VirtuaGunJitter = BIT(10),                ///< Add a bit of jitter to Virtua Gun coordinates
+        MovieCard = BIT(11),                      ///< Game requires or benefits from the Movie Card (MPEG video card)
+        MovieCardWindow = BIT(12),                ///< Game uses the EXBG $A1 display window path
 #undef BIT
 
         // Proper fixes for each flag:

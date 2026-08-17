@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ymir/sys/backup_ram.hpp>
+#include <ymir/sys/cheats.hpp>
 #include <ymir/sys/clocks.hpp>
 
 #include "app/ui/state/debug/memory_viewer_state.hpp"
@@ -102,6 +103,7 @@ EmuEvent SetAreaCode(uint8 areaCode);
 
 EmuEvent SetDeinterlace(bool enable);
 EmuEvent SetTransparentMeshes(bool enable);
+EmuEvent SetInternalResolutionScale(uint32 scale);
 
 EmuEvent UseNullVDPRenderer(util::Event &event);
 EmuEvent SwitchVDPRenderer();
@@ -109,6 +111,10 @@ EmuEvent SwitchVDPRenderer();
 EmuEvent SetDebugTrace(bool enable);
 EmuEvent DumpMemory();
 EmuEvent DumpMemRegion(const ui::mem_view::MemoryViewerState &memView);
+
+// Cheats. The frontend owns the cheat list and presentation; this just
+// pushes the currently-active flat patch list down to the emulator.
+EmuEvent SetActiveCheatCodes(std::vector<ymir::sys::CheatCode> codes);
 
 EmuEvent InsertPeripheral(uint32 port, ymir::peripheral::PeripheralType type);
 

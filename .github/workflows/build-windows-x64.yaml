@@ -1,0 +1,153 @@
+name: Build Windows x64 (AVX2)
+
+# Fork-local Windows x64 build that produces a ready-to-deliver ZIP artifact.
+# Triggered on every push and pull_request that targets dev -- together
+# with build-macos.yaml this gives cross-platform coverage (macOS arm64 +
+# Windows x64 AVX2) for every merge / PR on this fork.
+# Does not depend on upstream StrikerX3/Ymir's private NuGet feed; uses the
+# official vcpkg binary cache + local files cache instead so the workflow
+# works on this fork without extra secrets.
+
+on:
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  pull_request:
+    branches:
+      - dev
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+# Cancel in-flight runs for the same ref so a fast follow-up push doesn't
+# pay double CI minutes.
+concurrency:
+  group: build-windows-x64-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TYPE: Release
+  VCPKG_EXE: ${{ github.workspace }}/vcpkg/vcpkg
+
+jobs:
+  build-windows-x64:
+    name: windows-x64-AVX2
+    runs-on: windows-2025
+    # AVX2 baseline is acceptable for Ymir x64 releases (the repo's default
+    # x86_64-AVX2 matrix in upstream build.yaml uses the same flag). Forks
+    # targeting older CPUs can switch to x86_64-SSE2 by overriding
+    # Ymir_AVX2: OFF on a workflow_dispatch run.
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set reusable strings
+        id: strings
+        shell: pwsh
+        run: |
+          $sha = $env:GITHUB_SHA.Substring(0, [Math]::Min(8, $env:GITHUB_SHA.Length))
+          echo "build-output-dir=${{ github.workspace }}/build" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          echo "ymir-artifact-name=ymir-windows-x64-AVX2-$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: ${{ github.workspace }}/vcpkg/bootstrap-vcpkg.bat
+
+      - name: Cache vcpkg
+        id: cache-vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          # Triple + OS + arch tags keep the cache distinct across runners.
+          key: windows-x64-AVX2-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            windows-x64-AVX2-vcpkg-
+
+      - name: Configure CMake
+        env:
+          VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/vcpkg_cache,readwrite'
+        shell: pwsh
+        run: |
+          cmake -B ${{ steps.strings.outputs.build-output-dir }} `
+            -DCMAKE_CXX_COMPILER=clang++ `
+            -DCMAKE_C_COMPILER=clang `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-win-llvm-avx2-static-md `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DYmir_AVX2=ON `
+            -DYmir_ENABLE_IPO=ON `
+            -DYmir_ENABLE_DEVLOG=OFF `
+            -DYmir_ENABLE_IMGUI_DEMO=OFF `
+            -DYmir_ENABLE_UPDATE_CHECKS=OFF `
+            -DYmir_ENABLE_SANDBOX=OFF `
+            -DYmir_ENABLE_YMDASM=OFF `
+            -DYmir_ENABLE_TESTS=OFF `
+            -DYmir_EXTRA_INLINING=ON `
+            -DYmir_LIBRARY_ONLY=OFF `
+            -DYmir_DEV_BUILD=OFF `
+            -S ${{ github.workspace }} `
+            -G Ninja
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ env.BUILD_TYPE }} --parallel
+
+      - name: Get gamecontrollerdb.txt
+        uses: actions/checkout@v4
+        with:
+          repository: mdqinc/SDL_GameControllerDB
+          sparse-checkout: |
+            gamecontrollerdb.txt
+            LICENSE
+          sparse-checkout-cone-mode: false
+          path: gcdb
+
+      - name: Package Windows artifact
+        shell: pwsh
+        run: |
+          $licensesDir = Join-Path (Get-Location) "licenses"
+          New-Item -ItemType Directory -Force -Path $licensesDir | Out-Null
+          Get-ChildItem -Recurse -Path "${{ steps.strings.outputs.build-output-dir }}\vcpkg_installed" -Filter copyright |
+            ForEach-Object {
+              $port = Split-Path $_.DirectoryName -Leaf
+              $dest = Join-Path $licensesDir "$port-LICENSE.txt"
+              Copy-Item $_.FullName $dest -Force
+            }
+
+          Copy-Item -Path ".\apps\ymir-sdl3\res\licenses\*"                     -Destination "$licensesDir\" -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path ".\vendor\concurrentqueue\concurrentqueue\LICENSE.md" -Destination "$licensesDir\concurrentqueue-LICENSE.md"
+          Copy-Item -Path ".\vendor\imgui\imgui\LICENSE.txt"                    -Destination "$licensesDir\imgui-LICENSE.txt"
+          Copy-Item -Path ".\vendor\libchdr\libchdr\LICENSE.txt"                -Destination "$licensesDir\libchdr-LICENSE.txt"
+          Copy-Item -Path ".\vendor\libchdr\libchdr\deps\lzma-25.01\LICENSE"    -Destination "$licensesDir\lzma-LICENSE"
+          Copy-Item -Path ".\vendor\lz4\lz4\lib\LICENSE"                         -Destination "$licensesDir\lz4-LICENSE"
+          Copy-Item -Path ".\vendor\mio\LICENSE"                                 -Destination "$licensesDir\mio-LICENSE"
+          Copy-Item -Path ".\vendor\xxHash\xxHash\LICENSE"                       -Destination "$licensesDir\xxHash-LICENSE"
+          Copy-Item -Path ".\LICENSE"                                            -Destination "$licensesDir\Ymir-LICENSE"
+          Copy-Item -Path "${{ github.workspace }}\gcdb\LICENSE"                  -Destination "$licensesDir\SDL_GameControllerDB-LICENSE"
+          Copy-Item -Path "${{ github.workspace }}\gcdb\gamecontrollerdb.txt"     -Destination ".\gamecontrollerdb.txt"
+
+          # Mirror the upstream "build/apps/ymir-sdl3" layout expected by the
+          # archive command, in case the local ninja output dir differs.
+          $binDir = Join-Path ${{ steps.strings.outputs.build-output-dir }} "apps\ymir-sdl3"
+          if (-not (Test-Path (Join-Path $binDir "ymir-sdl3.exe"))) {
+            $binDir = ${{ steps.strings.outputs.build-output-dir }}
+          }
+
+          Compress-Archive -Path "README.md","CHANGELOG.md","TROUBLESHOOTING.md","gamecontrollerdb.txt","$licensesDir/","$binDir/ymir-sdl3.exe" `
+            -DestinationPath "${{ steps.strings.outputs.ymir-artifact-name }}.zip"
+
+      - name: Upload Ymir artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.strings.outputs.ymir-artifact-name }}
+          path: ${{ steps.strings.outputs.ymir-artifact-name }}.zip

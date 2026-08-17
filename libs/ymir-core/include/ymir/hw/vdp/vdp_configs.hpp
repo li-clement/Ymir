@@ -25,13 +25,17 @@ struct Enhancements {
     /// with half-transparency on top of other graphics.
     bool transparentMeshes = false;
 
+    /// @brief Internal resolution scale factor (1=native, 2=2x, 3=3x, 4=4x).
+    /// When greater than 1, the VDP2 compositor upscales the framebuffer by this factor.
+    uint32 internalResolutionScale = 1;
+
     /// @brief Determines if any enhancement is enabled:
     /// - `deinterlace` is set to `true`
     /// - `transparentMeshes` is set to `true`
-    /// resolution scale factor is greater than 1.0x
+    /// - `internalResolutionScale` is greater than 1
     /// @return `true` if any enhancement is active, `false` otherwise
     bool AnyEnabled() const {
-        return deinterlace || transparentMeshes;
+        return deinterlace || transparentMeshes || internalResolutionScale > 1;
     }
 };
 

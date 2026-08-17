@@ -340,6 +340,35 @@ namespace settings::video {
                 ctx.displayScale);
         }
 
+        void InternalResolutionScale(SharedContext &ctx) {
+            auto &settings = ctx.serviceLocator.GetRequired<Settings>();
+            auto &videoSettings = settings.video;
+            int scale = (int)videoSettings.enhancements.internalResolutionScale.Get();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted("Internal resolution scale:");
+            widgets::ExplanationTooltip(
+                "Renders the VDP2 output at a multiple of the native resolution, then scales it to the window.\n"
+                "Higher values produce a smoother, less pixelated image at the cost of GPU/CPU performance.\n"
+                "1x = native Saturn resolution (320x240 typically).\n"
+                "2x/3x/4x = internal framebuffer is 2/3/4 times larger on each axis; final window scaling still applies.\n"
+                "\n"
+                "Note: changes take effect on the next VDP2 resolution change (e.g. when the game switches display "
+                "modes).",
+                ctx.displayScale);
+            ImGui::SameLine();
+            // Use a fixed width so the slider is always visible regardless of
+            // window width and font scale. Without this, long localized labels
+            // or narrower windows can cause the slider to wrap out of view.
+            ImGui::SetNextItemWidth(160.0f * ctx.displayScale);
+            ImGui::PushID("##internal_resolution_scale");
+            int newScale = scale;
+            if (settings.MakeDirty(ImGui::SliderInt("##irs", &newScale, 1, 4, "%dx", ImGuiSliderFlags_AlwaysClamp))) {
+                newScale = std::max(1, std::min(newScale, 4));
+                videoSettings.enhancements.internalResolutionScale = (uint32)newScale;
+            }
+            ImGui::PopID();
+        }
+
     } // namespace enhancements
 
 } // namespace settings::video
@@ -533,6 +562,23 @@ namespace settings::cdblock {
             ImGui::EndDisabled();
             ImGui::TextColored(ctx.colors.warn, "No CD Block ROMs found. Low level emulation cannot be enabled.");
         }
+    }
+
+    void MovieCardEnabled(SharedContext &ctx) {
+        auto &settings = ctx.serviceLocator.GetRequired<Settings>();
+        auto &cdblockSettings = settings.cdblock;
+
+        bool enabled = cdblockSettings.movieCardEnabled;
+        if (settings.MakeDirty(ImGui::Checkbox("Enable Movie Card (MPEG video)", &enabled))) {
+            cdblockSettings.movieCardEnabled = enabled;
+        }
+        widgets::ExplanationTooltip(
+            "Enables emulation of the optional MPEG video card expansion.\\n"
+            "When enabled, decoded MPEG video is overlaid onto the VDP framebuffer\\n"
+            "and MPEG audio is mixed into the audio output.\\n"
+            "\\n"
+            "This is an experimental feature.",
+            ctx.displayScale);
     }
 
 } // namespace settings::cdblock

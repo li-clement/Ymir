@@ -328,6 +328,8 @@ int App::Run(const CommandLineOptions &options) {
             [&](bool value) { m_context.EnqueueEvent(events::emu::SetDeinterlace(value)); });
         videoSettings.enhancements.transparentMeshes.Observe(
             [&](bool value) { m_context.EnqueueEvent(events::emu::SetTransparentMeshes(value)); });
+        videoSettings.enhancements.internalResolutionScale.ObserveAndNotify(
+            [&](uint32 value) { m_context.EnqueueEvent(events::emu::SetInternalResolutionScale(value)); });
     }
 
     // Profile priority:
@@ -852,11 +854,12 @@ void App::RunEmulator() {
     // nearest interpolation with an integer scale, then rendering the display texture onto the screen with linear
     // interpolation.
 
-    // Software framebuffer texture
+    // Software framebuffer texture, sized for the largest supported internal-resolution scale.
+    constexpr uint32 kFbMaxScale = SharedContext::Screen::kMaxInternalScale;
     auto swFbTextureResult = m_graphicsService.CreateTexture(
         {
-            .width = vdp::kMaxResH,
-            .height = vdp::kMaxResV,
+            .width = vdp::kMaxResH * kFbMaxScale,
+            .height = vdp::kMaxResV * kFbMaxScale,
             .format = gfx::PixelFormat::R8G8B8X8_UNORM,
             .access = gfx::TextureAccess::Streaming,
             .filterMode = gfx::TextureFilterMode::Nearest,
@@ -908,11 +911,14 @@ void App::RunEmulator() {
         assert(m_graphicsService.IsTextureHandleValid(dispTexture));
         assert(m_graphicsService.IsTextureHandleValid(swFbTexture));
 
-        // Recreate render target texture if scale changed
-        if (scale != screen.fbScale) {
+        // Recreate render target texture if display or internal resolution changed.
+        const uint32 desiredW = screen.width * scale;
+        const uint32 desiredH = screen.height * scale;
+        if (scale != screen.fbScale || desiredW != screen.dispTextureWidth || desiredH != screen.dispTextureHeight) {
             screen.fbScale = scale;
-            auto result = m_graphicsService.ResizeTexture(dispTexture, vdp::kMaxResH * screen.fbScale,
-                                                          vdp::kMaxResV * screen.fbScale);
+            screen.dispTextureWidth = desiredW;
+            screen.dispTextureHeight = desiredH;
+            auto result = m_graphicsService.ResizeTexture(dispTexture, desiredW, desiredH);
             if (!result) {
                 devlog::warn<grp::base>("Failed to resize framebuffer texture: {}", result.Error().message);
             }
@@ -1127,8 +1133,17 @@ void App::RunEmulator() {
     }
 
     m_context.saturn.instance->SCSP.SetSampleCallback(
-        {&m_context.audioSystem,
-         [](sint16 left, sint16 right, void *ctx) { static_cast<AudioSystem *>(ctx)->ReceiveSample(left, right); }});
+        {&m_context,
+         [](sint16 left, sint16 right, void *ctx) {
+             auto *sharedContext = static_cast<SharedContext *>(ctx);
+             auto &mpeg = sharedContext->saturn.instance->CDBlock.GetMPEGCard();
+             sint16 mpegLeft, mpegRight;
+             if (mpeg.GetNextAudioSample(mpegLeft, mpegRight)) {
+                 left = static_cast<sint16>(std::clamp<sint32>(left + mpegLeft, -32768, 32767));
+                 right = static_cast<sint16>(std::clamp<sint32>(right + mpegRight, -32768, 32767));
+             }
+             sharedContext->audioSystem.ReceiveSample(left, right);
+         }});
 
     m_context.saturn.instance->SCSP.SetSendMidiOutputCallback(
         {&m_midiService, [](std::span<uint8> payload, void *ctx) {
@@ -2395,6 +2410,7 @@ void App::RunEmulator() {
                     }
                     ImGui::MenuItem("Backup memory manager", nullptr,
                                     &m_windowManagerService.BackupMemoryManagerWindow().Open);
+                    ImGui::MenuItem("Cheat manager", nullptr, &m_windowManagerService.CheatManagerWindow().Open);
 
                     ImGui::Separator();
 

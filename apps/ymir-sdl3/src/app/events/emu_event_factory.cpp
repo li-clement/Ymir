@@ -124,6 +124,13 @@ EmuEvent SwitchVDPRenderer() {
     });
 }
 
+EmuEvent SetInternalResolutionScale(uint32 scale) {
+    return RunFunction([=](SharedContext &ctx) {
+        ctx.saturn.instance->VDP.ModifyEnhancements(
+            [&](vdp::config::Enhancements &enhancements) { enhancements.internalResolutionScale = std::clamp(scale, 1u, 4u); });
+    });
+}
+
 EmuEvent SetDebugTrace(bool enable) {
     return RunFunction([=](SharedContext &ctx) {
         ctx.saturn.instance->EnableDebugTracing(enable);

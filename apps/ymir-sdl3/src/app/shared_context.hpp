@@ -263,6 +263,8 @@ struct SharedContext {
         double scale = 1.0;             // final computed display scale
         int dCenterX = 0, dCenterY = 0; // display position (center) on window
         int dSizeX = 1, dSizeY = 1;     // display size on window
+        uint32 dispTextureWidth = 0;    // current display texture width (tracks scale+internal scale)
+        uint32 dispTextureHeight = 0;   // current display texture height
         bool doubleResH = false;
         bool doubleResV = false;
 
@@ -290,7 +292,9 @@ struct SharedContext {
         }
 
         // Staging framebuffers -- emu renders to one, GUI copies to other
-        std::array<std::array<uint32, ymir::vdp::kMaxResH * ymir::vdp::kMaxResV>, 2> framebuffers;
+        // Allocated at maximum internal resolution scale (4x) to avoid reallocation
+        static constexpr uint32 kMaxInternalScale = 4;
+        std::array<std::array<uint32, ymir::vdp::kMaxResH * kMaxInternalScale * ymir::vdp::kMaxResV * kMaxInternalScale>, 2> framebuffers;
         std::mutex mtxFramebuffer;
         bool updated = false;
 

@@ -142,6 +142,12 @@ struct Configuration {
         ///
         /// Causes a hard reset when changed.
         util::Observable<bool> useLLE = false;
+
+        /// @brief Enable Movie Card (MPEG video card) emulation.
+        ///
+        /// When enabled, decoded MPEG video is overlaid onto the VDP framebuffer
+        /// and MPEG audio is mixed into the audio output.
+        util::Observable<bool> movieCardEnabled = false;
     } cdblock;
 
     /// @brief Notifies all observers registered with all observables.

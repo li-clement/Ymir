@@ -1,5 +1,7 @@
 #include <ymir/hw/vdp/renderer/vdp_renderer_sw.hpp>
 
+#include <ymir/hw/mpeg/mpeg_overlay.hpp>
+
 #include <ymir/util/constexpr_for.hpp>
 #include <ymir/util/dev_log.hpp>
 #include <ymir/util/inline.hpp>
@@ -136,6 +138,12 @@ void SoftwareVDPRenderer::Reset(bool hard) {
 }
 
 void SoftwareVDPRenderer::UpdateEnhancements() {
+    // Apply internal resolution scale
+    const uint32 newScale = std::max(1u, std::min(m_enhancements.internalResolutionScale, kMaxInternalScale));
+    if (newScale != m_internalScale) {
+        m_internalScale = newScale;
+        m_resolutionChanged = true; // trigger resolution callback to update frontend
+    }
     UpdateFunctionPointers();
 }
 
@@ -508,7 +516,9 @@ void SoftwareVDPRenderer::VDP2SetResolution(uint32 h, uint32 v, bool exclusive) 
     if (m_state.regs2.TVMD.BDCLMD) {
         color |= m_state.state2.lineBackLayerState.backColor.u32;
     }
-    std::fill_n(m_framebuffer.begin(), m_HRes * m_VRes, color);
+    const uint32 outW = m_HRes * m_internalScale;
+    const uint32 outH = m_VRes * m_internalScale;
+    std::fill_n(m_framebuffer.begin(), outW * outH, color);
 }
 
 void SoftwareVDPRenderer::VDP2SetField(bool odd) {
@@ -555,10 +565,22 @@ void SoftwareVDPRenderer::VDP2EndFrame() {
     }
     if (m_resolutionChanged) {
         m_resolutionChanged = false;
-        Callbacks.VDP2ResolutionChanged(m_HRes, m_VRes);
+        Callbacks.VDP2ResolutionChanged(m_HRes * m_internalScale, m_VRes * m_internalScale);
     }
     Callbacks.VDP2DrawFinished();
-    SwCallbacks.FrameComplete(m_framebuffer.data(), m_HRes, m_VRes);
+    DrawMPEGVideoOverlay();
+    SwCallbacks.FrameComplete(m_framebuffer.data(), m_HRes * m_internalScale, m_VRes * m_internalScale);
+}
+
+void SoftwareVDPRenderer::DrawMPEGVideoOverlay() {
+    if (m_mpegCard == nullptr) {
+        return;
+    }
+    mpeg::MPEGVideoOverlay overlay;
+    const uint32 outW = m_HRes * m_internalScale;
+    const uint32 outH = m_VRes * m_internalScale;
+    overlay.BlitLatestFrame(*m_mpegCard, std::span<uint32>{m_framebuffer.data(), static_cast<size_t>(outW) * outH},
+                            outW, outH, m_internalScale, &m_mpegWindow);
 }
 
 // -----------------------------------------------------------------------------
@@ -3797,7 +3819,13 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         if (regs2.borderColorModeLatch) {
             color |= state2.lineBackLayerState.backColor.u32;
         }
-        std::fill_n(&m_framebuffer[y * m_HRes], m_HRes, color);
+        const uint32 outW = m_HRes * m_internalScale;
+        const uint32 baseRow = y * m_internalScale;
+        std::fill_n(&m_framebuffer[baseRow * outW], outW, color);
+        // Replicate to remaining scaled rows to avoid leaving stale pixels in unscaled rows
+        for (uint32 s = 1; s < m_internalScale; ++s) {
+            std::copy_n(&m_framebuffer[baseRow * outW], outW, &m_framebuffer[(baseRow + s) * outW]);
+        }
         return;
     }
 
@@ -4011,7 +4039,9 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         }
     }
 
-    const std::span<Color888> framebufferOutput(reinterpret_cast<Color888 *>(&m_framebuffer[y * m_HRes]), m_HRes);
+    const uint32 outW = m_HRes * m_internalScale;
+    const std::span<Color888> framebufferOutput(
+        reinterpret_cast<Color888 *>(&m_framebuffer[y * m_internalScale * outW]), m_HRes);
 
     const bool normalTVMode = regs2.TVMD.HRESOn < 2;
     const uint8 cramMode = regs2.vramControl.colorRAMMode;
@@ -4189,13 +4219,15 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
         for (uint32 x = 0; Color888 &outputColor : framebufferOutput) {
             if (layer0ColorOffsetEnabled[x]) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[scanline_layers[x][0]]];
-                outputColor = {
-                    .r = kColorOffsetLUT[colorOffset.r][outputColor.r],
-                    .g = kColorOffsetLUT[colorOffset.g][outputColor.g],
-                    .b = kColorOffsetLUT[colorOffset.b][outputColor.b],
-                    .pad = 0,
-                    .msb = 0,
-                };
+                // Compose the offset into a packed u32 then store through the
+                // union's first member. Designated-init (.r/.g/.b/.pad/.msb)
+                // is rejected on this anonymous-bitfield union by some Clang
+                // versions (CI: "field designator (null) does not refer to any
+                // field in type 'Color888'").
+                const uint8 rOff = kColorOffsetLUT[colorOffset.r][outputColor.r];
+                const uint8 gOff = kColorOffsetLUT[colorOffset.g][outputColor.g];
+                const uint8 bOff = kColorOffsetLUT[colorOffset.b][outputColor.b];
+                outputColor.u32 = uint32(rOff) | (uint32(gOff) << 8) | (uint32(bOff) << 16);
             }
             ++x;
         }
@@ -4247,13 +4279,14 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
             for (uint32 x = 0; Color888 &mesheColor : meshOut) {
                 const auto &colorOffset = regs2.colorOffset[regs2.colorOffsetSelect[LYR_Sprite]];
                 if (colorOffset.nonZero) {
-                    mesheColor = {
-                        .r = kColorOffsetLUT[colorOffset.r][mesheColor.r],
-                        .g = kColorOffsetLUT[colorOffset.g][mesheColor.g],
-                        .b = kColorOffsetLUT[colorOffset.b][mesheColor.b],
-                        .pad = 0,
-                        .msb = 0,
-                    };
+                    // Pack the lookup result into the union's u32 instead of
+                    // a designated-init list, to keep port compatibility with
+                    // Clang versions that fail to resolve anonymous-bitfield
+                    // designators (see outputColor path above).
+                    const uint8 rOff = kColorOffsetLUT[colorOffset.r][mesheColor.r];
+                    const uint8 gOff = kColorOffsetLUT[colorOffset.g][mesheColor.g];
+                    const uint8 bOff = kColorOffsetLUT[colorOffset.b][mesheColor.b];
+                    mesheColor.u32 = uint32(rOff) | (uint32(gOff) << 8) | (uint32(bOff) << 16);
                 }
                 ++x;
             }
@@ -4400,6 +4433,24 @@ FORCE_INLINE void SoftwareVDPRenderer::VDP2ComposeLine(uint32 y, const VDP2Regs 
     // Opaque alpha
     for (Color888 &outputColor : framebufferOutput) {
         outputColor.u32 |= 0xFF000000;
+    }
+
+    // Upscale horizontally: replicate each native pixel m_internalScale times
+    if (m_internalScale > 1) {
+        uint32 *const fbRow = reinterpret_cast<uint32 *>(&m_framebuffer[y * m_internalScale * outW]);
+        // Work backwards to avoid overwriting source pixels
+        for (int x = (int)m_HRes - 1; x >= 0; --x) {
+            const uint32 px = fbRow[x];
+            const uint32 dstStart = (uint32)x * m_internalScale;
+            std::fill_n(&fbRow[dstStart], m_internalScale, px);
+        }
+
+        // Upscale vertically: replicate the finished row to m_internalScale - 1 following rows
+        const uint32 baseRow = y * m_internalScale;
+        for (uint32 s = 1; s < m_internalScale; ++s) {
+            std::copy_n(&m_framebuffer[baseRow * outW], outW,
+                        &m_framebuffer[(baseRow + s) * outW]);
+        }
     }
 }
 

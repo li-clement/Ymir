@@ -1,11 +1,13 @@
 #include <ymir/sys/saturn.hpp>
 
 #include <ymir/db/game_db.hpp>
+#include <ymir/hw/mpeg/mpeg_overlay.hpp>
 
 #include <ymir/util/dev_log.hpp>
 
 #include <bit>
 #include <cassert>
+#include <cstdlib>
 
 namespace ymir {
 
@@ -152,6 +154,18 @@ Saturn::Saturn()
 
     ConfigureAccessCycles(false);
 
+    // Wire Movie Card video overlay into the software VDP renderer.
+    // Only enable the Movie Card if the game requires it (game DB MovieCard
+    // flag) or the user explicitly enabled it in settings. Vatlva and other
+    // games that detect the card at boot fall back to non-MPEG FMV when the
+    // card is absent.
+    if (configuration.cdblock.movieCardEnabled.Get()) {
+        CDBlock.SetMovieCardPresent(true);
+    }
+    if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+        swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
+    }
+
     m_enableDebugTracing = false;
     m_emulateSH2Caches = false;
     UpdateFunctionPointers();
@@ -164,6 +178,12 @@ Saturn::Saturn()
     configuration.system.videoStandard.Observe(
         [&](core::config::sys::VideoStandard videoStandard) { UpdateVideoStandard(videoStandard); });
     configuration.cdblock.useLLE.Observe([&](bool enabled) { SetCDBlockLLE(enabled); });
+    configuration.cdblock.movieCardEnabled.Observe([&](bool enabled) {
+        CDBlock.SetMovieCardPresent(enabled);
+        if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+            swRenderer->SetMPEGCard(&CDBlock.GetMPEGCard());
+        }
+    });
 
     Reset(true);
 }
@@ -494,6 +514,10 @@ void Saturn::DumpCDBlockDRAM(std::ostream &out) {
 
 template <bool debug, bool enableSH2Cache, bool cdblockLLE>
 void Saturn::RunFrameImpl() {
+    // Re-apply enabled cheat codes before each frame so any value the game
+    // clobbers (lives, money, timer, etc.) is restored before its next read.
+    cheats.ApplyAll(mainBus);
+
     // Run until we reach the vertical blanking area.
     // At that point, the frame is fully rendered and dispatched to the frontend.
     while (VDP.GetVerticalPhase() == vdp::VerticalPhase::BlankingAndSync) {
@@ -507,6 +531,111 @@ void Saturn::RunFrameImpl() {
         }
     }
     SCSP.SyncSCSPThreadPublic();
+
+    // Forward the latest $A1 MpegSetWindow state to the software VDP renderer
+    // so the overlay composites the Movie Card frame buffer at the right
+    // position/size/ratio. Window writes ($A1) are infrequent (per-FMV), so
+    // a per-frame copy is fine; it avoids needing an observer chain through
+    // the CDBlock.
+    if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+        // Forward the latest $A1 MpegSetWindow state unchanged. This is the
+        // path on which Moon Cradle's EXBG FMV placement was implemented;
+        // title-specific compatibility belongs in the overlay, not here.
+        mpeg::MPEGWindowState win{};
+        win.fbPosX = CDBlock.GetMpegWindowFbPosX();
+        win.fbPosY = CDBlock.GetMpegWindowFbPosY();
+        win.fbRatioX = CDBlock.GetMpegWindowFbRatioX();
+        win.fbRatioY = CDBlock.GetMpegWindowFbRatioY();
+        win.dispPosX = CDBlock.GetMpegWindowDispPosX();
+        win.dispPosY = CDBlock.GetMpegWindowDispPosY();
+        win.dispSizeW = CDBlock.GetMpegWindowDispSizeW();
+        win.dispSizeH = CDBlock.GetMpegWindowDispSizeH();
+        swRenderer->SetMPEGWindow(win);
+    }
+
+    // Decode MPEG video frames at the stream's native frame rate.
+    // Saturn display is 60Hz (NTSC) / 50Hz (PAL). MPEG FMV is typically ~30fps
+    // (NTSC) or ~25fps (PAL). Lunar's FMV is NTSC 29.97 (i.e. 30000/1001).
+    //
+    // Pacing strategy: trust the decoder's frame.time stamps (in seconds).
+    // Each VDP2 frame, advance our internal clock by 1/displayHz and decode
+    // frames until their time stamp exceeds the clock. This decouples decoding
+    // from `plm_get_framerate()` (which may briefly report 60fps when it
+    // hasn't parsed the system header yet, causing the FMV to play at 2x).
+    auto &mpegCard = CDBlock.GetMPEGCard();
+    // New FMV pipeline (StartPlayback / soft reopen): drop the previous
+    // stream's presentation clock. Otherwise old frame.time values force
+    // catch-up decoding or leave the previous FMV's picture on screen.
+    if (mpegCard.ConsumePresentationClockReset()) {
+        m_mpegFrameAccum = 0.0;
+        m_mpegClockSeconds = 0.0;
+    }
+    const auto mpegStatus = mpegCard.GetStatus();
+    if (mpegCard.HasStreamEnded() && mpegStatus == ymir::mpeg::MPEGCardStatus::Playing) {
+        // pl_mpeg has reached end-of-stream; tell the card to finalize so its
+        // status transitions Playing -> Ended. MpegGetStatus/$AF will then
+        // report videoEnded=true and the game exits its MPEG polling loop.
+        mpegCard.SignalEndOfStream();
+    }
+    if (mpegStatus == ymir::mpeg::MPEGCardStatus::Playing ||
+        mpegStatus == ymir::mpeg::MPEGCardStatus::Ended) {
+        // Once truly ended, stop decoding further frames (preserves the
+        // current overlay frame for the title screen instead of clearing).
+        if (mpegStatus == ymir::mpeg::MPEGCardStatus::Ended) {
+            // Leave the last decoded frame in place for overlay rendering.
+        } else if (mpegCard.GetDecodeTiming() == ymir::mpeg::MPEGDecodeTiming::Host) {
+            // Host-synchronized decode ($94 decode timing 1, Vatlva):
+            // the game issues $97 MpegOutDecodingSync to step pictures one
+            // at a time (about every other VBlank for a 29.97fps stream).
+            // For titles that never call $97 (interrupt-delivery issues),
+            // we fall back to VSYNC-paced decode: decode one frame per
+            // VBlank if the current frame's time stamp has passed.
+            // The first picture must decode autonomously before any $97
+            // arrives (erings: "a host-synchronized title waits for
+            // picture-start before its first $97").
+            if (mpegCard.HasHostDecodeStep()) {
+                mpegCard.ConsumeHostDecodeStep();
+                mpegCard.DecodeNextFrame();
+                CDBlock.PumpMPEGInterrupts();
+            } else if (!mpegCard.HasCurrentFrame() && mpegCard.HasHeaders()) {
+                // First picture: decode autonomously to trigger the
+                // picture-start interrupt that wakes the game's $97 loop.
+                mpegCard.DecodeNextFrame();
+                CDBlock.PumpMPEGInterrupts();
+            } else {
+                // Fallback VSYNC pacing: if no $97 step is pending and we
+                // already have a frame, decode the next one when its
+                // timestamp passes. This keeps Vatlva moving even when
+                // the game's interrupt handler never issues $97.
+                const double displayHz =
+                    (GetVideoStandard() == core::config::sys::VideoStandard::PAL) ? 50.0 : 60.0;
+                m_mpegClockSeconds += 1.0 / displayHz;
+                if (mpegCard.HasCurrentFrame() &&
+                    mpegCard.GetCurrentFrame().time < m_mpegClockSeconds) {
+                    mpegCard.DecodeNextFrame();
+                }
+            }
+        } else {
+            const double displayHz =
+                (GetVideoStandard() == core::config::sys::VideoStandard::PAL) ? 50.0 : 60.0;
+            m_mpegClockSeconds += 1.0 / displayHz;
+            // Decode frames whose timestamp is <= current display time.
+            constexpr int kMaxFramesPerVblank = 8;
+            for (int i = 0; i < kMaxFramesPerVblank; ++i) {
+                if (!mpegCard.HasCurrentFrame() ||
+                    mpegCard.GetCurrentFrame().time < m_mpegClockSeconds) {
+                    if (!mpegCard.DecodeNextFrame()) {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    } else {
+        m_mpegFrameAccum = 0.0;
+        m_mpegClockSeconds = 0.0;
+    }
 }
 
 template <bool debug, bool enableSH2Cache, bool cdblockLLE>
@@ -571,14 +700,14 @@ bool Saturn::Run() {
         // CD drive is ticked by the scheduler
     }
 
-    // TODO: AdvanceSMPC(execCycles);
-    /*const auto &clockRatios = GetClockRatios();
+    // AdvanceSMPC(execCycles);
+    const auto &clockRatios = GetClockRatios();
     const uint64 smpcScaledCycles = cycles * clockRatios.SMPCNum + m_smpcFracCycles;
     const uint64 smpcCycles = smpcScaledCycles / clockRatios.SMPCDen;
     m_smpcFracCycles = smpcScaledCycles % clockRatios.SMPCDen;
     if (smpcCycles > 0) {
         SMPC.Advance(smpcCycles);
-    }*/
+    }
 
     m_scheduler.Advance(execCycles);
 
@@ -848,6 +977,15 @@ void Saturn::OnMediaChanged() {
     // Apply game-specific settings if needed
     const media::SaturnHeader &discHeader = m_cdif.GetDiscHeader();
     const db::GameInfo *info = db::GetGameInfo(discHeader.productNumber, m_fs.GetHash());
+    if (info != nullptr) {
+        fmt::println(stderr,
+                     "[game-db] match: product='{}', flags=0x{:X} (MovieCard={})",
+                     discHeader.productNumber, static_cast<uint64>(info->flags),
+                     BitmaskEnum(info->flags).AnyOf(db::GameInfo::Flags::MovieCard));
+    } else {
+        fmt::println(stderr, "[game-db] miss: product='{}' (no entry; default settings applied)",
+                     discHeader.productNumber);
+    }
     auto hasFlag = [&](db::GameInfo::Flags flag) { return info && BitmaskEnum(info->flags).AnyOf(flag); };
     ConfigureAccessCycles(hasFlag(db::GameInfo::Flags::FastBusTimings));
     ForceSH2CacheEmulation(hasFlag(db::GameInfo::Flags::ForceSH2Cache));
@@ -858,6 +996,12 @@ void Saturn::OnMediaChanged() {
     VDP.vdp2AccessPatternsConfig.relaxedBitmapCPAccessChecks =
         hasFlag(db::GameInfo::Flags::RelaxedVDP2BitmapCPAccessChecks);
     VDP.SetVirtuaGunJitter(hasFlag(db::GameInfo::Flags::VirtuaGunJitter));
+
+    // Auto-enable Movie Card for games that require it; disable for games
+    // that don't (so a previous Lunar session doesn't leak the card into
+    // a Vatlva session that should fall back to non-MPEG FMV).
+    configuration.cdblock.movieCardEnabled = hasFlag(db::GameInfo::Flags::MovieCard);
+    configuration.NotifyObservers();
 }
 
 // -----------------------------------------------------------------------------

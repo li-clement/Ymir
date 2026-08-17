@@ -36,6 +36,7 @@ namespace settings::video {
 
         void Deinterlace(SharedContext &ctx);
         void TransparentMeshes(SharedContext &ctx);
+        void InternalResolutionScale(SharedContext &ctx);
 
     } // namespace enhancements
 
@@ -55,6 +56,7 @@ namespace settings::cdblock {
 
     void CDReadSpeed(SharedContext &ctx);
     void CDBlockLLE(SharedContext &ctx);
+    void MovieCardEnabled(SharedContext &ctx);
 
 } // namespace settings::cdblock
 

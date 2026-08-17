@@ -117,6 +117,8 @@ add_executable(ymir-sdl3
     src/app/ui/model/debug/sh2_watchpoints_manager.cpp
     src/app/ui/model/debug/sh2_watchpoints_manager.hpp
 
+    src/app/ui/state/cheat_list_state.cpp
+    src/app/ui/state/cheat_list_state.hpp
     src/app/ui/state/debug/memory_viewer_state.hpp
 
     src/app/ui/utils/debug/vdp_window_set_printer.hpp
@@ -295,6 +297,8 @@ add_executable(ymir-sdl3
     src/app/ui/windows/about_window.hpp
     src/app/ui/windows/backup_ram_manager_window.cpp
     src/app/ui/windows/backup_ram_manager_window.hpp
+    src/app/ui/windows/cheat_manager_window.cpp
+    src/app/ui/windows/cheat_manager_window.hpp
     src/app/ui/windows/message_history_window.cpp
     src/app/ui/windows/message_history_window.hpp
     src/app/ui/windows/peripheral_config_window.cpp

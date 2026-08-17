@@ -19,6 +19,8 @@ See @ref index for instructions on how to use the emulator.
 #include "memory.hpp"
 #include "system.hpp"
 
+#include <ymir/sys/cheats.hpp>
+
 #include <ymir/hw/cart/cart.hpp>
 #include <ymir/hw/cdblock/cd_drive.hpp>
 #include <ymir/hw/cdblock/cdblock.hpp>
@@ -356,6 +358,13 @@ private:
 
     /// @brief The event scheduler.
     core::Scheduler m_scheduler;
+    uint64 m_smpcFracCycles = 0;
+    double m_mpegFrameAccum = 0.0;
+    // Track MPEG playback time independently of VDP2 timing. Each VDP2 frame
+    // we advance this clock by 1/displayHz and decode frames whose timestamp
+    // has not yet overtaken the clock. This decouples pacing from pl_mpeg's
+    // potentially-noisy framerate estimator.
+    double m_mpegClockSeconds = 0.0;
 
     /// @brief Advances the SH-1 CPU by the specified number of system (SH-2) cycles.
     /// Uses and updates spillover and fractional SH-1 cycle counters.
@@ -440,6 +449,8 @@ public:
     smpc::SMPC SMPC;          ///< SMPC and input devices
     scsp::SCSP SCSP;          ///< SCSP and its DSP, and MC68EC000 CPU
     cdblock::CDBlock CDBlock; ///< HLE CD block
+
+    sys::CheatEngine cheats;  ///< User-supplied cheat codes applied each frame
 
     // LLE CD block components
     // TODO: move to cdblock::CDBlockLLE and rename cdblock::CDBlock to CDBlockHLE
