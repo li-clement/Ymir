@@ -175,3 +175,75 @@ TEST_CASE("CD Block playback streams filtered data sectors into the Movie Card",
     h.RunCommand(0x9100);
     CHECK((h.RR(1) & mpeg::kMPEGCardInterruptFrameDecoded) != 0);
 }
+
+TEST_CASE("CD Block $A1 MpegSetWindow latches the EXBG display window for Moon Cradle",
+          "[mpeg][movie-card][cdblock][window]") {
+    CDBlockHarness h;
+
+    h.RunCommand(0xE000, 0x0001); // Authenticate MPEG
+    h.RunCommand(0x9300);         // MPEG init
+
+    // Frame-buffer position (sub 0): source-side anchor into the Movie Card
+    // frame buffer. Moon Cradle's opening FMV uses X=$20, Y=$28.
+    // CR1 low byte = sub-index 0, CR2 = X, CR3 = Y.
+    h.RunCommand(0xA100, 0x0001, 0x0020, 0x0028);
+    CHECK(h.cdb.GetMpegWindowFbPosX() == 0x0020);
+    CHECK(h.cdb.GetMpegWindowFbPosY() == 0x0028);
+
+    // Frame-buffer ratio (sub 1): raw wire values, 1:1 encodes as $8011.
+    h.RunCommand(0xA101, 0x0001, 0x8011, 0x8011);
+    CHECK(h.cdb.GetMpegWindowFbRatioX() == 0x8011);
+    CHECK(h.cdb.GetMpegWindowFbRatioY() == 0x8011);
+
+    // Display position (sub 2): signed X/Y in decoder raster coordinates.
+    // Moon Cradle's opening FMV centres at X=$0F, Y=$28.
+    h.RunCommand(0xA102, 0x0001, 0x000F, 0x0028);
+    CHECK(h.cdb.GetMpegWindowDispPosX() == 0x000F);
+    CHECK(h.cdb.GetMpegWindowDispPosY() == 0x0028);
+
+    // Display size (sub 3): visible extent. Moon Cradle opening FMV is
+    // 288x160 (centre inset of the 320x240 screen).
+    h.RunCommand(0xA103, 0x0001, 0x0120, 0x00A0);
+    CHECK(h.cdb.GetMpegWindowDispSizeW() == 0x0120);
+    CHECK(h.cdb.GetMpegWindowDispSizeH() == 0x00A0);
+
+    // In-game FMV re-sends only the changed sub-parameters (ratio stays 1:1):
+    // frame-buffer position $60/$3C, display position $17/$31, size 160x120.
+    h.RunCommand(0xA100, 0x0001, 0x0060, 0x003C);
+    h.RunCommand(0xA102, 0x0001, 0x0017, 0x0031);
+    h.RunCommand(0xA103, 0x0001, 0x00A0, 0x0078);
+    CHECK(h.cdb.GetMpegWindowFbPosX() == 0x0060);
+    CHECK(h.cdb.GetMpegWindowFbPosY() == 0x003C);
+    CHECK(h.cdb.GetMpegWindowFbRatioX() == 0x8011); // unchanged
+    CHECK(h.cdb.GetMpegWindowFbRatioY() == 0x8011); // unchanged
+    CHECK(h.cdb.GetMpegWindowDispPosX() == 0x0017);
+    CHECK(h.cdb.GetMpegWindowDispPosY() == 0x0031);
+    CHECK(h.cdb.GetMpegWindowDispSizeW() == 0x00A0);
+    CHECK(h.cdb.GetMpegWindowDispSizeH() == 0x0078);
+
+    // MpegInit does not clear the EXBG latches; Moon Cradle initializes
+    // once and reuses the window for later movies.
+    h.RunCommand(0x9300);
+    CHECK(h.cdb.GetMpegWindowDispSizeW() == 0x00A0);
+    CHECK(h.cdb.GetMpegWindowDispSizeH() == 0x0078);
+}
+
+TEST_CASE("CD Block $A2/$A3/$A4 MpegSet{Border,Fade,VideoEffects} latch without errors",
+          "[mpeg][movie-card][cdblock][window]") {
+    CDBlockHarness h;
+
+    h.RunCommand(0xE000, 0x0001);
+    h.RunCommand(0x9300);
+
+    // Border colour: $0000 (black).
+    h.RunCommand(0xA200, 0x0000, 0x0000, 0x0000);
+    CHECK((h.HIRQ() & cdblock::kHIRQ_CMOK) != 0);
+
+    // Fade: $0000 (no fade).
+    h.RunCommand(0xA300, 0x0000, 0x0000, 0x0000);
+    CHECK((h.HIRQ() & cdblock::kHIRQ_CMOK) != 0);
+
+    // Video effects: Moon Cradle sends $0F00 on every FMV (interpolation flags).
+    h.RunCommand(0xA400, 0x0F00, 0x0000, 0x0000);
+    CHECK((h.HIRQ() & cdblock::kHIRQ_CMOK) != 0);
+}

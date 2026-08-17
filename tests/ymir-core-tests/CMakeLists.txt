@@ -1,5 +1,7 @@
 ## Create the executable target
 add_executable(ymir-core-tests
+    src/db/game_db_tests.cpp
+
     src/hw/mpeg/cdblock_mpeg_command_tests.cpp
     src/hw/mpeg/mpeg_audio_tests.cpp
     src/hw/mpeg/mpeg_card_tests.cpp

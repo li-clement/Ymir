@@ -3808,6 +3808,9 @@ void CDBlock::CmdMpegInit() {
     m_mpegVidCon = 0;
     m_mpegVidLay = 0;
     m_mpegVidBufNum = 0xFF;
+    // EXBG window/effect latches persist across $93 MpegInit on hardware;
+    // Moon Cradle initializes the MPEG subsystem once and reuses its $A1
+    // window for later movies. They are reset with the CDBlock/system state.
     m_mpegESProbePending = false;
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
@@ -3851,7 +3854,11 @@ void CDBlock::CmdMpegPlay() {
         m_mpegPlayMode = v;
         m_mpegCard.SetPlayMode(v);
     }
-    // Start CD data flow and set MPEGCard to Playing state.
+    // Starting a movie enables the EXBG output. $A0 may subsequently turn it
+    // off during teardown; keeping the play-side default enabled is important
+    // for titles such as Moon Cradle, whose first $A0 re-send can arrive only
+    // after the first decoded picture is already available.
+    m_mpegCard.SetDisplayEnabled(true);
     m_mpegCard.StartPlayback();
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
@@ -4056,7 +4063,60 @@ void CDBlock::CmdMpegDisplay() {
 }
 
 void CDBlock::CmdMpegSetWindow() {
-    devlog::info<grp::cmd>("-> MPEG set window");
+    // $A1 MpegSetWindow byte packing (CDC_MpSetWin):
+    //   CR1 low byte = sub-index (0..3) selecting which sub-parameter to write
+    //   CR2 = parameter count / reserved word (normally 1)
+    //   CR3 = first parameter word
+    //   CR4 = second parameter word
+    //
+    // The four sub-parameters configure the EXBG (Movie Card) display
+    // window, matching erings' mpegWinFbPos/FbRatio/DispPos/DispSiz:
+    //   sub 0: frame-buffer position  (X = CR2, Y = CR3)
+    //   sub 1: frame-buffer ratio     (X = CR2, Y = CR3; raw wire values)
+    //   sub 2: display position       (X = CR2, Y = CR3; decoder coordinates)
+    //   sub 3: display size           (W = CR2, H = CR3; visible extent)
+    //
+    // Moon Cradle programs these on every FMV to scale and position the
+    // Movie Card frame buffer inside the VDP2 screen (opening FMV lands
+    // centred at 288x160; in-game FMV sits at 160x120 inside the screen).
+    // Without this command the EXBG composite falls back to a 1:1 full-
+    // frame blit and the picture is drawn at the wrong position/size.
+    //
+    // sub-index is the low 3 bits of CR1 (mask 0x07 per erings' cmdDispatch;
+    // we only ever see 0..3 in practice so we mask as a defensive guard).
+    const uint8 sub = m_CR[0] & 0x07;
+    devlog::info<grp::cmd>("-> MPEG set window (sub={}, count={:04X}, X/width={:04X}, Y/height={:04X})",
+                           sub, m_CR[1], m_CR[2], m_CR[3]);
+    switch (sub) {
+    case 0:
+        // Frame-buffer position: signed 16-bit X/Y, source-side anchor into
+        // the Movie Card frame buffer where the picture starts.
+        m_mpegWindow.fbPosX = static_cast<sint16>(m_CR[2]);
+        m_mpegWindow.fbPosY = static_cast<sint16>(m_CR[3]);
+        break;
+    case 1:
+        // Frame-buffer ratio: raw 16-bit X/Y wire values, decoded by the
+        // overlay (1:1 encodes as $8011 on both axes).
+        m_mpegWindow.fbRatioX = m_CR[2];
+        m_mpegWindow.fbRatioY = m_CR[3];
+        break;
+    case 2:
+        // Display position: signed 16-bit X/Y in the Movie Card's output
+        // raster. The software renderer applies a per-mode origin offset
+        // (one dot left, screen-res lines centred) when compositing.
+        m_mpegWindow.dispPosX = static_cast<sint16>(m_CR[2]);
+        m_mpegWindow.dispPosY = static_cast<sint16>(m_CR[3]);
+        break;
+    case 3:
+        // Display size: visible extent (width, height). Zero means the
+        // window was never configured; the overlay falls back to 1:1.
+        m_mpegWindow.dispSizeW = m_CR[2];
+        m_mpegWindow.dispSizeH = m_CR[3];
+        break;
+    default:
+        break;
+    }
+
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
@@ -4065,7 +4125,13 @@ void CDBlock::CmdMpegSetWindow() {
 }
 
 void CDBlock::CmdMpegSetBorderColor() {
-    devlog::info<grp::cmd>("-> MPEG set border color");
+    // $A2 latches the border colour used by EXBG for the area outside the
+    // display window. The Movie Card's own frame buffer is larger than the
+    // display window; the border colour fills the gap. We store the value
+    // for state-tracking and ignore it in the overlay (the overlay's frame
+    // buffer is the VDP2 surface, which has its own composition rules).
+    devlog::info<grp::cmd>("-> MPEG set border color (CR1={:04X})", m_CR[1]);
+    m_mpegBorderColor = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
@@ -4074,7 +4140,13 @@ void CDBlock::CmdMpegSetBorderColor() {
 }
 
 void CDBlock::CmdMpegSetFade() {
-    devlog::info<grp::cmd>("-> MPEG set fade");
+    // $A3 latches the fade-in/fade-out setting (CR1). We store it but do not
+    // apply it: the real EXBG hardware fades the Movie Card's output through
+    // the configured RGB intensity; our overlay composites the latest frame
+    // directly. Lunar/Vatlva do not depend on fade behaviour so this is
+    // observationally equivalent to a no-op for the games we support today.
+    devlog::info<grp::cmd>("-> MPEG set fade (CR1={:04X})", m_CR[1]);
+    m_mpegFade = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;
@@ -4083,7 +4155,13 @@ void CDBlock::CmdMpegSetFade() {
 }
 
 void CDBlock::CmdMpegSetVideoEffects() {
-    devlog::info<grp::cmd>("-> MPEG set video effects");
+    // $A4 latches the video-effect flags (interpolation, dithering, etc.).
+    // erings notes the high byte of CR1 carries the effect flags; we store
+    // the full word. The software overlay does not apply effects, but
+    // Moon Cradle sends $0F00 on every FMV so we must at least acknowledge
+    // the command to keep its trace-shaped response.
+    devlog::info<grp::cmd>("-> MPEG set video effects (CR1={:04X})", m_CR[1]);
+    m_mpegVideoEffect = m_CR[1];
     m_RR[0] = GetStatusCode() << 8u;
     m_RR[1] = 0;
     m_RR[2] = 0;

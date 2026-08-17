@@ -105,6 +105,7 @@ static const std::unordered_map<std::string_view, GameInfo> kGameInfosByCode = {
     {"ST-27901G", {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Lunar - Silver Star Story (Japan) (Demo)
     {"T-27904G",  {.flags = RelaxedVDP2BitmapCPAccessChecks | MovieCard}}, // Lunar - Silver Star Story (Japan) (MPEG version)
     {"T-31501G",  {.flags = MovieCard}}, // VATLVA (Japan) (Rev A) - raw video ES, host-synchronized decode
+    {"T-9109G",   {.flags = MovieCard | MovieCardWindow}}, // Moon Cradle (Japan) - MPEG-PS user, VSYNC-paced decode, EXBG window placement
     {"GS-9088",   {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Mechanical Violator Hakaider - Last Judgement (Japan)
     {"T-2105G",   {.flags = RelaxedVDP2BitmapCPAccessChecks}}, // Shin Kaitei Gunkan - Koutetsu no Kodoku (Japan)
 

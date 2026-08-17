@@ -237,10 +237,10 @@ void AboutWindow::PrepareWindow() {
     auto *vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(660 * m_context.displayScale, 800 * m_context.displayScale),
+    ImGui::SetNextWindowSize(ImVec2(660 * m_context.displayScale, 560 * m_context.displayScale),
                              ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(400 * m_context.displayScale, 240 * m_context.displayScale),
-                                        ImVec2(1000 * m_context.displayScale, 900 * m_context.displayScale));
+                                        ImVec2(1000 * m_context.displayScale, 700 * m_context.displayScale));
 }
 
 void AboutWindow::DrawContents() {
@@ -278,10 +278,10 @@ void AboutWindow::DrawAboutTab() {
     const auto &midiService = m_context.serviceLocator.GetRequired<services::MIDIService>();
     const auto &graphicsService = m_context.serviceLocator.GetRequired<services::GraphicsService>();
     SDL_Texture *texture = graphicsService.GetSDLTexture(m_context.images.ymirLogo.texture);
-    ImGui::Image((ImTextureID)texture, ImVec2(m_context.images.ymirLogo.size.x * m_context.displayScale,
-                                              m_context.images.ymirLogo.size.y * m_context.displayScale));
+    ImGui::Image((ImTextureID)texture, ImVec2(m_context.images.ymirLogo.size.x * m_context.displayScale * 0.25f,
+                                              m_context.images.ymirLogo.size.y * m_context.displayScale * 0.25f));
 
-    ImGui::PushFont(m_context.fonts.display, m_context.fontSizes.display);
+    ImGui::PushFont(m_context.fonts.display, m_context.fontSizes.displaySmall);
     ImGui::TextUnformatted("Ymir");
     ImGui::PopFont();
     ImGui::PushFont(m_context.fonts.sansSerif.bold, m_context.fontSizes.xlarge);
@@ -350,6 +350,11 @@ void AboutWindow::DrawAboutTab() {
         ImGui::Text("Using %s VDP1/VDP2 renderer.", vdp.GetRenderer().GetName().data());
     }
 
+    ImGui::Text("Using MPEG Movie Card decoder.");
+    ImGui::Text("Using internal resolution upscaling (1x/2x/3x/4x).");
+    ImGui::Text("Using MP3/OGG audio track playback.");
+    ImGui::Text("Using linear interpolation audio resampling.");
+
     const char *audioDriver = SDL_GetCurrentAudioDriver();
     ImGui::Text("Using %s audio driver.", AudioDriverToHumanReadableString(audioDriver));
     ImGui::Text("Using %s MIDI API.", RtMidi::getApiDisplayName(midiService.GetInput()->getCurrentApi()).c_str());
@@ -361,7 +366,7 @@ void AboutWindow::DrawAboutTab() {
 
     ImGui::TextUnformatted("The source code can be found at ");
     ImGui::SameLine(0, 0);
-    ImGui::TextLinkOpenURL("https://github.com/StrikerX3/Ymir");
+    ImGui::TextLinkOpenURL("https://github.com/li-clement/Ymir");
 
     ImGui::NewLine();
     ImGui::TextUnformatted("Join the official ");
@@ -618,6 +623,8 @@ void AboutWindow::DrawAcknowledgementsTab() {
     ImGui::TextUnformatted("Special thanks");
     ImGui::PopFont();
 
+    ImGui::TextUnformatted("To the erings project and its authors for their detailed Sega Saturn hardware documentation and MPEG command traces.");
+
     ImGui::TextUnformatted("To the ");
     ImGui::SameLine(0, 0);
     ImGui::TextLinkOpenURL("/r/EmuDev community", "https://www.reddit.com/r/EmuDev/");
@@ -630,11 +637,11 @@ void AboutWindow::DrawAcknowledgementsTab() {
 
     ImGui::TextUnformatted("To the ");
     ImGui::SameLine(0, 0);
-    ImGui::TextLinkOpenURL("project contributors", "https://github.com/StrikerX3/Ymir/graphs/contributors");
+    ImGui::TextLinkOpenURL("project contributors", "https://github.com/li-clement/Ymir/graphs/contributors");
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(" and users ");
     ImGui::SameLine(0, 0);
-    ImGui::TextLinkOpenURL("reporting issues and feature requests", "https://github.com/StrikerX3/Ymir/issues");
+    ImGui::TextLinkOpenURL("reporting issues and feature requests", "https://github.com/li-clement/Ymir/issues");
     ImGui::SameLine(0, 0);
     ImGui::TextUnformatted(", including:");
     ImGui::Indent();

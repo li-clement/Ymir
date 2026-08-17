@@ -1,6 +1,7 @@
 #include <ymir/sys/saturn.hpp>
 
 #include <ymir/db/game_db.hpp>
+#include <ymir/hw/mpeg/mpeg_overlay.hpp>
 
 #include <ymir/util/dev_log.hpp>
 
@@ -531,6 +532,27 @@ void Saturn::RunFrameImpl() {
     }
     SCSP.SyncSCSPThreadPublic();
 
+    // Forward the latest $A1 MpegSetWindow state to the software VDP renderer
+    // so the overlay composites the Movie Card frame buffer at the right
+    // position/size/ratio. Window writes ($A1) are infrequent (per-FMV), so
+    // a per-frame copy is fine; it avoids needing an observer chain through
+    // the CDBlock.
+    if (auto *swRenderer = VDP.GetRendererAs<vdp::VDPRendererType::Software>()) {
+        // Forward the latest $A1 MpegSetWindow state unchanged. This is the
+        // path on which Moon Cradle's EXBG FMV placement was implemented;
+        // title-specific compatibility belongs in the overlay, not here.
+        mpeg::MPEGWindowState win{};
+        win.fbPosX = CDBlock.GetMpegWindowFbPosX();
+        win.fbPosY = CDBlock.GetMpegWindowFbPosY();
+        win.fbRatioX = CDBlock.GetMpegWindowFbRatioX();
+        win.fbRatioY = CDBlock.GetMpegWindowFbRatioY();
+        win.dispPosX = CDBlock.GetMpegWindowDispPosX();
+        win.dispPosY = CDBlock.GetMpegWindowDispPosY();
+        win.dispSizeW = CDBlock.GetMpegWindowDispSizeW();
+        win.dispSizeH = CDBlock.GetMpegWindowDispSizeH();
+        swRenderer->SetMPEGWindow(win);
+    }
+
     // Decode MPEG video frames at the stream's native frame rate.
     // Saturn display is 60Hz (NTSC) / 50Hz (PAL). MPEG FMV is typically ~30fps
     // (NTSC) or ~25fps (PAL). Lunar's FMV is NTSC 29.97 (i.e. 30000/1001).
@@ -955,6 +977,15 @@ void Saturn::OnMediaChanged() {
     // Apply game-specific settings if needed
     const media::SaturnHeader &discHeader = m_cdif.GetDiscHeader();
     const db::GameInfo *info = db::GetGameInfo(discHeader.productNumber, m_fs.GetHash());
+    if (info != nullptr) {
+        fmt::println(stderr,
+                     "[game-db] match: product='{}', flags=0x{:X} (MovieCard={})",
+                     discHeader.productNumber, static_cast<uint64>(info->flags),
+                     BitmaskEnum(info->flags).AnyOf(db::GameInfo::Flags::MovieCard));
+    } else {
+        fmt::println(stderr, "[game-db] miss: product='{}' (no entry; default settings applied)",
+                     discHeader.productNumber);
+    }
     auto hasFlag = [&](db::GameInfo::Flags flag) { return info && BitmaskEnum(info->flags).AnyOf(flag); };
     ConfigureAccessCycles(hasFlag(db::GameInfo::Flags::FastBusTimings));
     ForceSH2CacheEmulation(hasFlag(db::GameInfo::Flags::ForceSH2Cache));

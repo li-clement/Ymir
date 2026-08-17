@@ -242,6 +242,10 @@ namespace settings::video {
                 "modes).",
                 ctx.displayScale);
             ImGui::SameLine();
+            // Use a fixed width so the slider is always visible regardless of
+            // window width and font scale. Without this, long localized labels
+            // or narrower windows can cause the slider to wrap out of view.
+            ImGui::SetNextItemWidth(160.0f * ctx.displayScale);
             ImGui::PushID("##internal_resolution_scale");
             int newScale = scale;
             if (settings.MakeDirty(ImGui::SliderInt("##irs", &newScale, 1, 4, "%dx", ImGuiSliderFlags_AlwaysClamp))) {
