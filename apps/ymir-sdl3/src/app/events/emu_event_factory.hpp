@@ -106,7 +106,7 @@ EmuEvent SetTransparentMeshes(bool enable);
 EmuEvent SetInternalResolutionScale(uint32 scale);
 
 EmuEvent UseNullVDPRenderer(util::Event &event);
-EmuEvent SwitchVDPRenderer();
+EmuEvent SwitchVDPRenderer(bool verbose = true);
 
 EmuEvent SetDebugTrace(bool enable);
 EmuEvent DumpMemory();
