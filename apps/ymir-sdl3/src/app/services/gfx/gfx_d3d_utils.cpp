@@ -6,6 +6,8 @@
 
 #include <d3dkmthk.h> // must come after wil/com.h for NTSTATUS
 
+#include <cassert>
+
 namespace app::gfx {
 
 std::vector<DXGIGraphicsAdapter> g_adapters{};
@@ -23,6 +25,10 @@ void EnumerateDXGIGraphicsAdapters() {
     }
 
     g_adapters.clear();
+
+    // Track these separately so that g_adapters reallocations don't invoke the destructor to release the adapter
+    // instances prematurely
+    std::vector<IUnknown *> adapterPtrs{};
 
     IDXGIAdapter1 *dxgiAdapter = nullptr;
     for (UINT i = 0; factory->EnumAdapters1(i, &dxgiAdapter) != DXGI_ERROR_NOT_FOUND; ++i) {
@@ -65,7 +71,13 @@ void EnumerateDXGIGraphicsAdapters() {
         adapter.memory.dedicatedVideo = desc.DedicatedVideoMemory;
         adapter.memory.dedicatedSystem = desc.DedicatedSystemMemory;
         adapter.memory.sharedSystem = desc.SharedSystemMemory;
-        adapter.adapter = dxgiAdapter;
+        adapterPtrs.push_back(dxgiAdapter);
+    }
+
+    // Now copy the adapter pointers to the adapters vector
+    assert(g_adapters.size() == adapterPtrs.size());
+    for (size_t i = 0; i < g_adapters.size(); ++i) {
+        g_adapters[i].adapter = adapterPtrs[i];
     }
 }
 

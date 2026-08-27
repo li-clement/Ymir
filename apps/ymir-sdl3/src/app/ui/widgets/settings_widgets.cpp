@@ -93,12 +93,15 @@ namespace settings::video {
         auto &videoSettings = settings.video;
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Graphics backend:");
-        widgets::ExplanationTooltip("Select the graphics API used to render the GUI.\n"
-                                    //"Affects availability of additional features such as GPU rendering and shaders.\n"
-                                    "\n"
-                                    "Changes are applied immediately. If the new graphics backend fails to initialize, "
-                                    "this option automatically reverts to the last working backend option.",
-                                    ctx.displayScale);
+        widgets::ExplanationTooltip(
+            "Select the graphics API used to render the GUI.\n"
+            "Affects availability of additional features such as GPU rendering and shaders.\n"
+            "\n"
+            "Changes are applied immediately. If the new graphics backend fails to initialize, this option "
+            "automatically reverts to the last working backend option.\n"
+            "\n"
+            "SDL Renderer is offered as a fallback option and will not support any advanced graphics features.",
+            ctx.displayScale);
         ImGui::SameLine();
         if (ImGui::BeginCombo("##graphics_backend", gfx::GraphicsBackendName(videoSettings.graphicsBackend),
                               ImGuiComboFlags_HeightLarge | ImGuiComboFlags_WidthFitPreview)) {
@@ -252,56 +255,6 @@ namespace settings::video {
         }
 
     } // namespace swrenderer
-
-    namespace hwrenderer {
-
-        void VDP1VRAMSyncInterval(SharedContext &ctx) {
-            auto &settings = ctx.serviceLocator.GetRequired<Settings>();
-            using SyncInterval = core::config::hw_vdp::VDP1VRAMSyncInterval;
-            SyncInterval interval = settings.video.hwRenderer.vdp1SyncInterval.Get();
-
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("VDP1 VRAM sync interval:");
-            widgets::ExplanationTooltip(
-                "Selects how often to synchronize VDP1 VRAM writes:\n"
-                "- Command: synchronizes writes before processing each command (slowest, most accurate)\n"
-                "- Draw: synchronizes writes before the start of a VDP1 drawing sequence\n"
-                "- Swap: synchronizes writes before each framebuffer swap (fastest, least accurate)",
-                ctx.displayScale);
-            auto option = [&](const char *name, SyncInterval value) {
-                ImGui::SameLine();
-                if (settings.MakeDirty(ImGui::RadioButton(name, interval == value))) {
-                    settings.video.hwRenderer.vdp1SyncInterval = value;
-                }
-            };
-            option("Command", SyncInterval::Command);
-            option("Draw", SyncInterval::Draw);
-            option("Swap", SyncInterval::Swap);
-        }
-
-        void VDP2VRAMSyncInterval(SharedContext &ctx) {
-            auto &settings = ctx.serviceLocator.GetRequired<Settings>();
-            using SyncInterval = core::config::hw_vdp::VDP2VRAMSyncInterval;
-            SyncInterval interval = settings.video.hwRenderer.vdp2SyncInterval.Get();
-
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("VDP2 VRAM sync interval:");
-            widgets::ExplanationTooltip(
-                "Selects how often to synchronize VDP2 VRAM writes:\n"
-                "- Scanline: synchronizes writes before drawing a scanline (slowest, most accurate)\n"
-                "- Frame: synchronizes writes before starting a frame (fastest, least accurate)",
-                ctx.displayScale);
-            auto option = [&](const char *name, SyncInterval value) {
-                ImGui::SameLine();
-                if (settings.MakeDirty(ImGui::RadioButton(name, interval == value))) {
-                    settings.video.hwRenderer.vdp2SyncInterval = value;
-                }
-            };
-            option("Scanline", SyncInterval::Scanline);
-            option("Frame", SyncInterval::Frame);
-        }
-
-    } // namespace hwrenderer
 
     namespace enhancements {
 

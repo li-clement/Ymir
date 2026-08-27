@@ -104,12 +104,6 @@ struct Configuration {
         util::Observable<bool> threadedDeinterlacer = true;
     } swRenderer;
 
-    /// @brief Hardware VDP1 and VDP2 rendering configuration.
-    struct HardwareRenderer {
-        config::hw_vdp::VDP1VRAMSyncInterval vdp1SyncInterval = config::hw_vdp::VDP1VRAMSyncInterval::Command;
-        config::hw_vdp::VDP2VRAMSyncInterval vdp2SyncInterval = config::hw_vdp::VDP2VRAMSyncInterval::Scanline;
-    } hwRenderer;
-
     /// @brief SCSP and audio rendering configuration.
     struct Audio {
         /// @brief Sample interpolation method.

@@ -689,6 +689,29 @@ void App::RunEmulator() {
             in >> windowX >> windowY >> windowWidth >> windowHeight;
             if (in) {
                 initGeometry = false;
+
+                int numDisplays = 0;
+                SDL_DisplayID *displayIDs = SDL_GetDisplays(&numDisplays);
+                if (displayIDs != nullptr) {
+                    util::ScopeGuard sgFreeDisplayIDs{[&] { SDL_free(displayIDs); }};
+
+                    // If the window geometry happens to exactly match a display's bounds, reset it
+                    SDL_Rect displayRect{};
+                    for (int i = 0; i < numDisplays; ++i) {
+                        if (SDL_GetDisplayBounds(displayIDs[i], &displayRect)) {
+                            if (windowX == displayRect.x && windowY == displayRect.y && windowWidth == displayRect.w &&
+                                windowHeight == displayRect.h) {
+                                const char *displayName = SDL_GetDisplayName(displayIDs[i]);
+                                devlog::info<grp::base>(
+                                    "Window geometry matches the bounds of display {} and will be reset", displayName);
+                                devlog::info<grp::base>("{} bounds: {}x{} - {}x{}", displayName, displayRect.x,
+                                                        displayRect.y, displayRect.w, displayRect.h);
+                                initGeometry = true;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -1263,20 +1286,8 @@ void App::RunEmulator() {
     m_mouseHideTime = t;
 
     // Start emulator thread
-    m_emuThread = std::thread([&] { EmulatorThread(); });
-    ScopeGuard sgStopEmuThread{[&] {
-        // TODO: fix this hacky mess
-        // HACK: unpause, unsilence audio system and set frame request signal in order to unlock the emulator thread if
-        // it is waiting for free space in the audio buffer due to being paused
-        m_emuProcessEvent.Set();
-        m_context.audioSystem.SetSilent(false);
-        screen.frameRequestEvent.Set();
-        m_context.EnqueueEvent(events::emu::SetPaused(false));
-        m_context.EnqueueEvent(events::emu::Shutdown());
-        if (m_emuThread.joinable()) {
-            m_emuThread.join();
-        }
-    }};
+    StartEmulatorThread();
+    ScopeGuard sgStopEmuThread{[this] { StopEmulatorThread(); }};
 
     // Start screenshot processor thread
     m_screenshotService.Start(m_context);
@@ -3354,6 +3365,23 @@ void App::RunEmulator() {
 end_loop:; // the semicolon is not a typo!
 
     // Everything is cleaned up automatically by ScopeGuards
+}
+
+void App::StartEmulatorThread() {
+    m_emuThread = std::thread([this] { EmulatorThread(); });
+}
+
+void App::StopEmulatorThread() {
+    if (!m_emuThread.joinable()) {
+        return;
+    }
+
+    m_emuProcessEvent.Set();
+    m_context.screen.frameRequestEvent.Set();
+    m_context.audioSystem.SetSilent(true);
+    m_context.EnqueueEvent(events::emu::Shutdown());
+
+    m_emuThread.join();
 }
 
 void App::EmulatorThread() {

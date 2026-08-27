@@ -25,13 +25,6 @@ namespace settings::video {
 
     } // namespace swrenderer
 
-    namespace hwrenderer {
-
-        void VDP1VRAMSyncInterval(SharedContext &ctx);
-        void VDP2VRAMSyncInterval(SharedContext &ctx);
-
-    } // namespace hwrenderer
-
     namespace enhancements {
 
         void Deinterlace(SharedContext &ctx);

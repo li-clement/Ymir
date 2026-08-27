@@ -41,6 +41,8 @@ Introduces save state file version 14.
 
 ### Fixes
 
+- App: Don't persist window geometry in full screen mode.
+- App: Reset window geometry if it matches the bounds of a display.
 - Backup RAM: Fix crash when attempting to load a backup RAM cartridge with the default path.
 - CD Block (HLE): Report current CD status and raise CMOK HIRQ signal when processing unimplemented commands.
 - CD Block (HLE): Read reset position flag correctly from parameters.
@@ -577,7 +579,7 @@ Introduced save state file version 8.
 - App: Show actual VDP1 frame rate separated from VDP1 draw calls.
 - Build: FreeBSD support for x86-64 systems. (#389; @bsdcode)
 - Build: macOS builds are now universal -- one binary supports both Intel and Apple Silicon Macs. (#351; @Wunkolo)
-- Build: Nightly builds are now available [here](https://github.com/StrikerX3/Ymir/releases/latest-nightly).
+- Build: Nightly builds are now available [here](https://github.com/ymir-emu/Ymir/releases/latest-nightly).
 - Core: Improve manual reset event performance by using OS-specific implementations based on [cppcoro](https://github.com/lewissbaker/cppcoro).
 - Debugger: Added CD Block filters view.
 - Debugger: Added rudimentary SH-2 breakpoint management and per-game debugger state persistence. (#22)

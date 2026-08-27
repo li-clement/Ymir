@@ -97,7 +97,7 @@ struct Direct3D12GraphicsContext::Impl {
         D3D12Resource renderTarget;
         D3D12CommandAllocator cmdAlloc;
         UINT64 fenceValue;
-        Descriptor rtvDesc;
+        DescriptorRange rtvDesc;
     };
 
     D3D12Device device;
@@ -133,8 +133,8 @@ struct Direct3D12GraphicsContext::Impl {
     D3D12_VIEWPORT viewport;
     D3D12_RECT scissorRect;
 
-    Descriptor smpNearest;
-    Descriptor smpLinear;
+    DescriptorRange smpNearest;
+    DescriptorRange smpLinear;
 
     D3D12Resource vertexBuffer;
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
@@ -158,8 +158,8 @@ struct Direct3D12GraphicsContext::Impl {
         std::array<D3D12Resource, kFrameCount> stagingBuffers;
         std::array<void *, kFrameCount> stagingBuffersData;
 
-        Descriptor srvDesc;
-        Descriptor rtvDesc; // only valid for TextureAccess::RenderTarget
+        DescriptorRange srvDesc;
+        DescriptorRange rtvDesc; // only valid for TextureAccess::RenderTarget
 
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
         UINT numRows;
@@ -320,8 +320,8 @@ struct Direct3D12GraphicsContext::Impl {
                     return util::ErrorMessage{
                         fmt::format("Failed to create command allocator for swapchain frame #{}", n)};
                 }
-                Descriptor &rtvDesc = frames[n].rtvDesc;
-                if (!rtvHeapAlloc.Allocate(rtvDesc.cpuHandle, rtvDesc.gpuHandle, rtvDesc.index)) {
+                DescriptorRange &rtvDesc = frames[n].rtvDesc;
+                if (!rtvHeapAlloc.Allocate(rtvDesc)) {
                     return util::ErrorMessage{fmt::format("Failed to allocate RTV for swapchain frame #{}", n)};
                 }
                 frames[n].cmdAlloc->SetName(
@@ -368,10 +368,10 @@ struct Direct3D12GraphicsContext::Impl {
         // Create nearest neighbor and linear samplers
         {
             // Allocate descriptors
-            if (!samplerHeapAlloc.Allocate(smpNearest.cpuHandle, smpNearest.gpuHandle, smpNearest.index)) {
+            if (!samplerHeapAlloc.Allocate(smpNearest)) {
                 return util::ErrorMessage{"Could not allocate nearest neighbor sampler descriptor"};
             }
-            if (!samplerHeapAlloc.Allocate(smpLinear.cpuHandle, smpLinear.gpuHandle, smpLinear.index)) {
+            if (!samplerHeapAlloc.Allocate(smpLinear)) {
                 return util::ErrorMessage{"Could not allocate linear sampler descriptor"};
             }
 
@@ -675,8 +675,8 @@ struct Direct3D12GraphicsContext::Impl {
                 if (FAILED(swapchain->GetBuffer(n, IID_PPV_ARGS(&resource)))) {
                     return util::ErrorMessage{fmt::format("Failed to get swapchain buffer {}", n)};
                 }
-                Descriptor &rtvDesc = frames[n].rtvDesc;
-                if (!rtvHeapAlloc.Allocate(rtvDesc.cpuHandle, rtvDesc.gpuHandle, rtvDesc.index)) {
+                DescriptorRange &rtvDesc = frames[n].rtvDesc;
+                if (!rtvHeapAlloc.Allocate(rtvDesc)) {
                     return util::ErrorMessage{fmt::format("Failed to allocate RTV for swapchain frame #{}", n)};
                 }
                 device->CreateRenderTargetView(resource, nullptr, rtvDesc.cpuHandle);
@@ -957,7 +957,7 @@ struct Direct3D12GraphicsContext::Impl {
             }
         }
 
-        if (!resourceHeapAlloc.Allocate(texture.srvDesc.cpuHandle, texture.srvDesc.gpuHandle, texture.srvDesc.index)) {
+        if (!resourceHeapAlloc.Allocate(texture.srvDesc)) {
             return util::ErrorMessage{"Could not allocate SRV for texture"};
         }
 
@@ -969,7 +969,7 @@ struct Direct3D12GraphicsContext::Impl {
         device->CreateShaderResourceView(texture.resource.GetPointer(), &srvDesc, texture.srvDesc.cpuHandle);
 
         if (isRenderTarget) {
-            if (!rtvHeapAlloc.Allocate(texture.rtvDesc.cpuHandle, texture.rtvDesc.gpuHandle, texture.rtvDesc.index)) {
+            if (!rtvHeapAlloc.Allocate(texture.rtvDesc)) {
                 return util::ErrorMessage{"Could not allocate RTV for texture"};
             }
 
@@ -1027,8 +1027,8 @@ struct Direct3D12GraphicsContext::Impl {
         TextureToDelete &texToDelete = texturesToDelete.emplace_back();
         texToDelete.texture = std::move(texture.resource);
         texToDelete.stagingBuffers.swap(texture.stagingBuffers);
-        texToDelete.srvIndex = texture.srvDesc.index;
-        texToDelete.rtvIndex = texture.rtvDesc.index;
+        texToDelete.srvIndex = texture.srvDesc.baseIndex;
+        texToDelete.rtvIndex = texture.rtvDesc.baseIndex;
         texToDelete.targetFenceVance = currFrame.fenceValue + kFrameCount;
         texToDelete.isRenderTarget = texture.spec.access == TextureAccess::RenderTarget;
     }
@@ -1410,7 +1410,7 @@ struct Direct3D12GraphicsContext::Impl {
         }
 
         // Select sampler based on texture filtering mode
-        const Descriptor &smpDesc = [&] {
+        const DescriptorRange &smpDesc = [&] {
             switch (instance->spec.filterMode) {
             case TextureFilterMode::Nearest: return smpNearest;
             case TextureFilterMode::Linear: return smpLinear;
@@ -1529,8 +1529,10 @@ bool Direct3D12GraphicsContext::ImGuiInit() {
     initInfo.SrvDescriptorAllocFn = [](ImGui_ImplDX12_InitInfo *info, D3D12_CPU_DESCRIPTOR_HANDLE *out_cpu_handle,
                                        D3D12_GPU_DESCRIPTOR_HANDLE *out_gpu_handle) {
         auto &impl = *static_cast<Impl *>(info->UserData);
-        UINT index;
-        impl.resourceHeapAlloc.Allocate(*out_cpu_handle, *out_gpu_handle, index);
+        DescriptorRange range{};
+        impl.resourceHeapAlloc.Allocate(range);
+        *out_cpu_handle = range.cpuHandle;
+        *out_gpu_handle = range.gpuHandle;
     };
     initInfo.SrvDescriptorFreeFn = [](ImGui_ImplDX12_InitInfo *info, D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle,
                                       D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle) {

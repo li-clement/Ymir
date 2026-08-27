@@ -34,6 +34,7 @@ public:
             }
             m_descriptorSize = device->GetDescriptorHandleIncrementSize(desc.Type);
             m_numDescriptors = desc.NumDescriptors;
+            m_type = desc.Type;
         }
         return result;
     }
@@ -80,11 +81,18 @@ public:
         return m_numDescriptors;
     }
 
+    /// @brief Retrieves the descriptor heap type.
+    /// @return the heap type
+    D3D12_DESCRIPTOR_HEAP_TYPE GetHeapType() const {
+        return m_type;
+    }
+
 private:
     D3D12_CPU_DESCRIPTOR_HANDLE m_cpuStart = {};
     D3D12_GPU_DESCRIPTOR_HANDLE m_gpuStart = {};
     UINT m_descriptorSize = 0;
     UINT m_numDescriptors = 0;
+    D3D12_DESCRIPTOR_HEAP_TYPE m_type;
 };
 
 } // namespace ymir::gpu::d3d12
