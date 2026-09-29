@@ -13,6 +13,7 @@ See @ref index for instructions on how to use the emulator.
 #include <ymir/core/scheduler.hpp>
 
 #include <ymir/savestate/savestate.hpp>
+#include <ymir/sys/cheats.hpp>
 
 #include <ymir/debug/debug_break.hpp>
 
@@ -431,6 +432,7 @@ public:
     // Components
 
     sys::SystemMemory mem;    ///< IPL ROM, low and high WRAM, internal backup memory
+    sys::CheatEngine cheats;  ///< Active per-frame memory patches
     sys::SH2Bus mainBus;      ///< Primary system bus connecting SH-2s, SCU, IPL ROM and WRAMs
     sh2::SH2 masterSH2;       ///< Master SH-2
     sh2::SH2 slaveSH2;        ///< Slave SH-2

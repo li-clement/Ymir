@@ -1,6 +1,7 @@
 #include "cheat_manager_window.hpp"
 
 #include <app/events/emu_event_factory.hpp>
+#include <app/imgui_data.hpp>
 
 #include <ymir/sys/saturn.hpp>
 
@@ -113,7 +114,7 @@ CheatManagerWindow::CheatManagerWindow(SharedContext &context)
 }
 
 void CheatManagerWindow::PrepareWindow() {
-    ImGui::SetNextWindowSizeConstraints(ImVec2(640.0f * m_context.displayScale, 480.0f * m_context.displayScale),
+    ImGui::SetNextWindowSizeConstraints(ImVec2(640.0f * GetYmirImGuiData()->displayScale, 480.0f * GetYmirImGuiData()->displayScale),
                                         ImVec2(FLT_MAX, FLT_MAX));
 }
 
@@ -149,13 +150,13 @@ void CheatManagerWindow::DrawSearchSection() {
     ImGui::TextDisabled(
         "Workflow: pick a value width, scan for the value, change it in-game, then narrow with the buttons below.");
 
-    ImGui::SetNextItemWidth(90.0f * m_context.displayScale);
+    ImGui::SetNextItemWidth(90.0f * GetYmirImGuiData()->displayScale);
     if (ImGui::Combo("Width##search_w", &m_searchWidth, kWidthLabels, IM_ARRAYSIZE(kWidthLabels))) {
         m_search.Reset();
     }
 
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.0f * m_context.displayScale);
+    ImGui::SetNextItemWidth(160.0f * GetYmirImGuiData()->displayScale);
     if (ImGui::BeginCombo("Compare##search_op", kSearchOps[m_searchOp].label)) {
         for (int i = 0; i < IM_ARRAYSIZE(kSearchOps); ++i) {
             if (ImGui::Selectable(kSearchOps[i].label, m_searchOp == i)) {
@@ -170,7 +171,7 @@ void CheatManagerWindow::DrawSearchSection() {
     if (!needsOperand) {
         ImGui::BeginDisabled();
     }
-    ImGui::SetNextItemWidth(120.0f * m_context.displayScale);
+    ImGui::SetNextItemWidth(120.0f * GetYmirImGuiData()->displayScale);
     ImGui::InputTextWithHint("##operand", "value (hex)", m_operand.data(), m_operand.size(),
                              ImGuiInputTextFlags_CharsHexadecimal);
     if (!needsOperand) {
@@ -230,7 +231,7 @@ void CheatManagerWindow::DrawSearchSection() {
     }
 
     // Freeze-value override row.
-    ImGui::SetNextItemWidth(120.0f * m_context.displayScale);
+    ImGui::SetNextItemWidth(120.0f * GetYmirImGuiData()->displayScale);
     ImGui::InputTextWithHint("Freeze at##fv", "<observed>", m_freezeValue.data(), m_freezeValue.size(),
                              ImGuiInputTextFlags_CharsHexadecimal);
     ImGui::SameLine();
@@ -241,11 +242,11 @@ void CheatManagerWindow::DrawSearchSection() {
     if (ImGui::BeginTable("matches", 3,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_SizingStretchProp,
-                          ImVec2(0, 150.0f * m_context.displayScale))) {
+                          ImVec2(0, 150.0f * GetYmirImGuiData()->displayScale))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80.0f * GetYmirImGuiData()->displayScale);
         ImGui::TableHeadersRow();
 
         const auto width = m_search.Width();
@@ -314,10 +315,10 @@ void CheatManagerWindow::DrawCheatList() {
 
     if (ImGui::BeginTable("cheat_list", 4,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 32.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 32.0f * GetYmirImGuiData()->displayScale);
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("Codes", ImGuiTableColumnFlags_WidthStretch, 2.0f);
-        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.0f * m_context.displayScale);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.0f * GetYmirImGuiData()->displayScale);
         ImGui::TableHeadersRow();
 
         for (size_t i = 0; i < entries.size(); ++i) {
@@ -365,7 +366,7 @@ void CheatManagerWindow::DrawAddSection() {
     ImGui::TextDisabled("One code per line: ADDR VALUE (hex). Width inferred from value digits.");
     ImGui::TextDisabled("Examples:  060FFFF8 0009    060FFFF8:09    060FFFF8 12345678");
     ImGui::InputTextMultiline("##codes", m_newCode.data(), m_newCode.size(),
-                              ImVec2(-1, 80.0f * m_context.displayScale));
+                              ImVec2(-1, 80.0f * GetYmirImGuiData()->displayScale));
 
     if (ImGui::Button("Add")) {
         std::string name = m_newName.data();

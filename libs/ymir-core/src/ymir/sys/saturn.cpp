@@ -494,6 +494,8 @@ void Saturn::DumpCDBlockDRAM(std::ostream &out) {
 
 template <bool debug, bool enableSH2Cache, bool cdblockLLE>
 void Saturn::RunFrameImpl() {
+    cheats.ApplyAll(mainBus);
+
     // Run until we reach the vertical blanking area.
     // At that point, the frame is fully rendered and dispatched to the frontend.
     while (VDP.GetVerticalPhase() == vdp::VerticalPhase::BlankingAndSync) {

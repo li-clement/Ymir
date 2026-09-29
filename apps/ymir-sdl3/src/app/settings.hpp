@@ -549,7 +549,6 @@ struct Settings {
     struct CDBlock {
         util::Observable<uint8> readSpeedFactor;
         bool useLLE;
-        util::Observable<bool> movieCardEnabled;
 
         bool overrideROM;
         std::filesystem::path romPath;
