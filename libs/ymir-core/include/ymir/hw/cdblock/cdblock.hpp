@@ -14,6 +14,7 @@
 #include <ymir/debug/cdblock_tracer_base.hpp>
 
 #include <ymir/hw/cdblock/cdblock_internal_callbacks.hpp>
+#include <ymir/hw/mpeg/mpeg_card.hpp>
 #include <ymir/sys/system_internal_callbacks.hpp>
 
 #include <ymir/savestate/savestate_cdblock.hpp>
@@ -51,6 +52,46 @@ public:
     void OpenTray();
     void CloseTray();
     [[nodiscard]] bool IsTrayOpen() const;
+
+    // Called from the pacing loop after MPEG decode to fire any pending
+    // MPEG-card interrupt flags as HIRQ bits. The game (Vatlva) polls for
+    // picture-start interrupts via $91 GetInterrupt, which is driven by
+    // kHIRQ_MPST. Without this call, decoded frames never trigger the
+    // interrupt and the game never advances its decode loop.
+    void PumpMPEGInterrupts();
+
+    mpeg::MPEGCard &GetMPEGCard() {
+        return m_mpegCard;
+    }
+
+    const mpeg::MPEGCard &GetMPEGCard() const {
+        return m_mpegCard;
+    }
+
+    // $A1 MpegSetWindow latched values. Used by the software VDP renderer
+    // to composite the Movie Card frame buffer onto the VDP2 framebuffer
+    // at the configured position/size/ratio. dispSizeW==0 && dispSizeH==0
+    // means the window was never configured: the overlay falls back to a
+    // 1:1 full-frame blit (Lunar / Vatlva path).
+    sint16 GetMpegWindowFbPosX() const { return m_mpegWindow.fbPosX; }
+    sint16 GetMpegWindowFbPosY() const { return m_mpegWindow.fbPosY; }
+    uint16 GetMpegWindowFbRatioX() const { return m_mpegWindow.fbRatioX; }
+    uint16 GetMpegWindowFbRatioY() const { return m_mpegWindow.fbRatioY; }
+    sint16 GetMpegWindowDispPosX() const { return m_mpegWindow.dispPosX; }
+    sint16 GetMpegWindowDispPosY() const { return m_mpegWindow.dispPosY; }
+    uint16 GetMpegWindowDispSizeW() const { return m_mpegWindow.dispSizeW; }
+    uint16 GetMpegWindowDispSizeH() const { return m_mpegWindow.dispSizeH; }
+
+    void SetMovieCardPresent(bool present) {
+        m_movieCardPresent = present;
+        // On a real Hi-Saturn, the CD Block starts with the MPEG card already
+        // authenticated. Simulate this by setting mpegAuthStatus to 2 when the
+        // card is present, so the game can probe the card without first calling
+        // MpegInit.
+        if (present) {
+            m_mpegAuthStatus = 2;
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Save states
@@ -150,12 +191,101 @@ private:
     //   2: MPEG card present
     uint8 m_mpegAuthStatus;
 
+    mpeg::MPEGCard m_mpegCard;
+    uint32 m_mpegInterruptMask = 0; // 24-bit MPEG interrupt cause mask
+    uint16 m_mpegConnection;
+    uint16 m_mpegStream;
+    uint16 m_mpegDisplay;
+    uint16 m_mpegMode;
+    uint16 m_mpegDecodingMethod;
+
+    // $94 SetMode stored parameters (Vatlva uses decode timing 1 = host-sync).
+    uint8 m_mpegMovieMode = 0xFF;
+    uint8 m_mpegDecodeTiming = 0;   // 0=VSYNC, 1=host-synchronized
+    uint8 m_mpegScanMode = 0;
+
+    // $95 Play stored parameters.
+    uint8 m_mpegPlayMode = 0;       // 0=A/V sync, 1=independent
+
+    // $96 SetDecodeMethod stored parameters.
+    uint8 m_mpegAudioMute = 0x04;
+    bool m_mpegVidPaused = false;
+    bool m_mpegVidFrozen = false;
+
+    // $97 host-synchronized decode step counter (mirrors MPEGCard).
+    // $9F picture size cache (learned from decoded sequence header).
+    // Both are accessed through m_mpegCard getters.
+
+    // Vatlva: flag set by $9A SetConnection when video partition is connected.
+    // FeedMPEGStream probes the first sector for 00 00 01 B3 (raw video ES)
+    // and switches the decoder to ES-only mode if found.
+    bool m_mpegESProbePending = false;
+
+    // MPEG connection state (matching Kronos mpegcon_struct)
+    uint8 m_mpegAudCon = 0;
+    uint8 m_mpegAudLay = 0;
+    uint8 m_mpegAudBufNum = 0xFF;
+    uint8 m_mpegVidCon = 0;
+    uint8 m_mpegVidLay = 0;
+    uint8 m_mpegVidBufNum = 0xFF;
+
+    // $A1 MpegSetWindow sub-parameter selectors:
+    //   sub 0 = frame-buffer position (X<<16 | Y)
+    //   sub 1 = frame-buffer ratio (X<<16 | Y, raw wire values)
+    //   sub 2 = display position (X<<16 | Y, decoder raster coordinates)
+    //   sub 3 = display size (W<<16 | H, visible extent, exclusive)
+    //
+    // Moon Cradle programs these on every FMV to scale and position the
+    // Movie Card frame buffer inside the VDP2 screen. dispSize==0 means
+    // the window was never configured: the overlay falls back to a 1:1
+    // full-frame blit (Lunar / Vatlva path).
+    struct MPEGWindow {
+        sint16 fbPosX = 0;
+        sint16 fbPosY = 0;
+        uint16 fbRatioX = 0;
+        uint16 fbRatioY = 0;
+        sint16 dispPosX = 0;
+        sint16 dispPosY = 0;
+        uint16 dispSizeW = 0;
+        uint16 dispSizeH = 0;
+    } m_mpegWindow;
+
+    // $A2 MpegSetBorderColor, $A3 MpegSetFade, $A4 MpegSetVideoEffects
+    // stored for completeness. The current overlay does not render any of
+    // these (real EXBG hardware composites the Movie Card frame buffer on
+    // top of VDP2 with the configured border/fade/effect), but games
+    // program them on every FMV so we must at least latch the values to
+    // keep the trace-shaped response.
+    uint16 m_mpegBorderColor = 0;
+    uint16 m_mpegFade = 0;
+    uint16 m_mpegVideoEffect = 0;
+
+    bool m_movieCardPresent = false; // set by SetMovieCardPresent when game DB or user enables it
+
+    // MPEG-1 Program Stream system-layer parser state (erings mpegPackScan
+    // equivalent). Tracks position across FeedMPEGStream calls so a system-
+    // end code (00 00 01 B9) is only matched at the system layer, not in
+    // packet payloads. Once matched at the system layer AND a connection-
+    // mode bit 0x02 (switch-on-system-end) is set on either audio or video,
+    // we stop feeding pl_mpeg, append a synthetic picture bounding code
+    // (00 00 01 00) and signal end-of-stream so pl_mpeg flushes its final
+    // reference frame. Reset on SetupGenericPlayback (new playback range),
+    // CmdMpegInit, and CmdMpegSetConnection (both partitions disconnected).
+    struct PackScan {
+        int skip = 0;     // bytes remaining to skip (pack header body or packet payload)
+        int code = 0;     // 0..3 = leading zero bytes of next start code
+        int length = 0;   // packet length being assembled
+        int lenN = 0;     // 0=idle, 1=awaiting high byte, 2=awaiting low byte
+    } m_packScan;
+    bool m_mpegSystemEndReached = false;
+
     bool SetupGenericPlayback(uint32 startParam, uint32 endParam, uint16 repeatParam);
     bool SetupFilePlayback(uint32 fileID, uint32 offset, uint8 filterNumber);
     bool SetupScan(uint8 direction);
 
     void ProcessDriveState();
     void ProcessDriveStatePlay();
+    void FeedMPEGStream(uint8 partitionIndex, const Buffer &buffer);
     void CheckPlayEnd();
 
     // -------------------------------------------------------------------------
@@ -414,19 +544,22 @@ private:
     void CmdMpegSetMode();           // 0x94
     void CmdMpegPlay();              // 0x95
     void CmdMpegSetDecodingMethod(); // 0x96
+    void CmdMpegOutDecodingSync();  // 0x97
+    void CmdMpegGetPictureSize();   // 0x9F
 
     // MPEG stream
-    void CmdMpegSetConnection(); // 0x9A
-    void CmdMpegGetConnection(); // 0x9B
-    void CmdMpegSetStream();     // 0x9D
-    void CmdMpegGetStream();     // 0x9E
-
+    void CmdMpegSetConnection();     // 0x9A
+    void CmdMpegGetConnection();     // 0x9B
+    void CmdMpegChangeConnection();  // 0x9C
+    void CmdMpegSetStream();         // 0x9D
+    void CmdMpegGetStream();         // 0x9E
     // MPEG display screen
     void CmdMpegDisplay();         // 0xA0
     void CmdMpegSetWindow();       // 0xA1
     void CmdMpegSetBorderColor();  // 0xA2
     void CmdMpegSetFade();         // 0xA3
     void CmdMpegSetVideoEffects(); // 0xA4
+    void CmdMpegGetLsi();          // 0xAE
     void CmdMpegSetLSI();          // 0xAF
 
     void CmdAuthenticateDevice();    // 0xE0

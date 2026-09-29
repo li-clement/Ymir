@@ -33,6 +33,7 @@ namespace grp {
     };
 
     struct intback : public base {
+        static constexpr devlog::Level level = devlog::level::debug;
         static constexpr std::string_view name = "SMPC-INTBACK";
     };
 
@@ -139,6 +140,16 @@ void SMPC::MapMemory(sys::SH2Bus &bus) {
 
 FLATTEN void SMPC::UpdateClockRatios(const sys::ClockRatios &clockRatios) {
     m_rtc.UpdateClockRatios(clockRatios);
+}
+
+void SMPC::Advance(uint64 cycles) {
+    (void)cycles;
+    // Peripheral input is polled on INTBACK (WriteINTBACKPeripheralReport -> ReadPeripherals).
+    // Do not call ReadPeripherals() here while an INTBACK transfer is in progress,
+    // or the report buffer may be overwritten mid-transfer.
+    //
+    // Advance() exists so the scheduler path can tick SMPC-related state (RTC already
+    // uses UpdateSysClock on demand). Input itself is event-driven via INTBACK.
 }
 
 void SMPC::LoadPersistentData(const PersistentSMPCData &data) {
@@ -612,9 +623,11 @@ void SMPC::ProcessCommand() {
 void SMPC::INTBACKBreak() {
     devlog::trace<grp::intback>("INTBACK cancelled");
     m_intbackInProgress = false;
+    m_intbackReportOffset = 0;
     SR.NPE = 0;
     SR.PDL = 0;
     SF = false;
+    m_scheduler.Cancel(m_commandEvent);
 }
 
 void SMPC::MSHON() {
@@ -715,7 +728,7 @@ void SMPC::RESDISA() {
 }
 
 void SMPC::INTBACK() {
-    devlog::trace<grp::intback>("Processing INTBACK {:02X} {:02X} {:02X}", IREG[0], IREG[1], IREG[2]);
+    devlog::trace<grp::intback>("Processing INTBACK {:02X} {:02X} {:02X} (inProgress={})", IREG[0], IREG[1], IREG[2], m_intbackInProgress);
 
     if (m_intbackInProgress) {
         WriteINTBACKPeripheralReport();
@@ -754,7 +767,6 @@ void SMPC::TriggerOptimizedINTBACKRead() {
         m_optimize = false;
 
         if (SF && m_intbackInProgress && m_getPeripheralData) {
-            devlog::trace<grp::intback>("Optimized INTBACK triggered");
             m_scheduler.ScheduleFromNow(m_commandEvent, 0);
         }
     }
@@ -765,6 +777,14 @@ void SMPC::TriggerVBlankIN() {
     if (m_intbackInProgress) {
         devlog::trace<grp::intback>("INTBACK timed out");
         INTBACKBreak();
+        // Reset the command-event callback back to OnCommandEvent so the
+        // next COMREG write dispatches a real command (e.g. INTBACK) instead
+        // of being mis-handled as another break. Without this, after a
+        // VBlank-in timeout the callback stays stuck on
+        // OnINTBACKBreakEvent, and every subsequent INTBACK the game issues
+        // becomes a no-op break — the game never reads fresh peripheral
+        // data and therefore never sees the Start button press during FMV.
+        m_scheduler.SetEventCallback(m_commandEvent, this, OnCommandEvent);
     }
 }
 
@@ -829,11 +849,6 @@ void SMPC::WriteINTBACKStatusReport() {
     const bool mshnmi = m_smpcOps.GetNMI();
     OREG[10] = 0b00110100 | (dotsel << 6u) | (mshnmi << 3u); // System status 1 (TODO: 1=SYSRES, 0=SNDRES)
     OREG[11] = 0b00000000;                                   // System status 2 (TODO: 6=CDRES)
-
-    OREG[12] = SMEM[0]; // SMEM 1 Saved Data
-    OREG[13] = SMEM[1]; // SMEM 2 Saved Data
-    OREG[14] = SMEM[2]; // SMEM 3 Saved Data
-    OREG[15] = SMEM[3]; // SMEM 4 Saved Data
 }
 
 void SMPC::WriteINTBACKPeripheralReport() {

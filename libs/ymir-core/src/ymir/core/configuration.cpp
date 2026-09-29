@@ -19,6 +19,7 @@ void Configuration::NotifyObservers() {
 
     cdblock.readSpeedFactor.Notify();
     cdblock.useLLE.Notify();
+    cdblock.movieCardEnabled.Notify();
 }
 
 } // namespace ymir::core

@@ -37,6 +37,8 @@ public:
 
     void UpdateClockRatios(const sys::ClockRatios &clockRatios);
 
+    void Advance(uint64 cycles);
+
     void LoadPersistentData(const PersistentSMPCData &data);
     void SavePersistentData(PersistentSMPCData &data) const;
     void PersistData() const;

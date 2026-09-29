@@ -13,6 +13,9 @@
 #include <ymir/hw/vdp/vdp_defs.hpp>
 #include <ymir/hw/vdp/vdp_state.hpp>
 
+#include <ymir/hw/mpeg/mpeg_card.hpp>
+#include <ymir/hw/mpeg/mpeg_overlay.hpp>
+
 #include <ymir/hw/vdp/renderer/common/vdp1_steppers.hpp>
 
 #include <ymir/hw/hw_defs.hpp>
@@ -166,6 +169,21 @@ public:
     // Utilities
 
     void DumpExtraVDP1Framebuffers(std::ostream &out) const override;
+
+    /// @brief Sets the MPEG card reference for video overlay.
+    /// Pass nullptr to disable overlay.
+    void SetMPEGCard(const mpeg::MPEGCard *card) {
+        m_mpegCard = card;
+    }
+
+    /// @brief Updates the $A1 MpegSetWindow state used by the overlay to
+    /// composite the Movie Card frame buffer at the configured display
+    /// position/size/ratio. Setting an unconfigured state (dispSizeW==0)
+    /// makes the overlay fall back to a 1:1 full-frame blit (Lunar /
+    /// Vatlva path).
+    void SetMPEGWindow(const mpeg::MPEGWindowState &window) {
+        m_mpegWindow = window;
+    }
 
 private:
     VDPState &m_state;
@@ -936,6 +954,13 @@ private:
 
     // Current display framebuffer.
     std::array<uint32, kMaxResH * kMaxResV> m_framebuffer;
+
+    const mpeg::MPEGCard *m_mpegCard = nullptr;
+    mpeg::MPEGWindowState m_mpegWindow{};
+
+    void DrawMPEGVideoOverlay();
+
+private:
 
     // Retrieves the current set of VDP2 registers.
     VDP2Regs &VDP2GetRegs();
